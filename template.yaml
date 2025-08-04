@@ -18,7 +18,6 @@ Parameters:
     Type: String
     Description: Metabase API key
     NoEcho: true
-    Default: mb_N3AJKKNi1HmqlDq7bkAJ+5LdUTVYid1O55zWJZKLC7U=
   
   MetabaseQuestionId:
     Type: String
@@ -35,7 +34,6 @@ Parameters:
     Type: String
     Description: Pinecone API key
     NoEcho: true
-    Default: pcsk_6Wr3Ap_AQVR54skX4UGjMUAc2Bh1aceJA658ETykxWanSggLweFDz7BuTUjSvzSHYfe5Nw
   
   PineconeIndexName:
     Type: String
