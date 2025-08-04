@@ -28,7 +28,6 @@ Parameters:
     Type: String
     Description: API key for authentication
     NoEcho: true
-    Default: 62jtdXZX035M78uHYGvQu1TV6ZBMZkkh6mqoTzJE
   
   PineconeApiKey:
     Type: String
