@@ -1,0 +1,203 @@
+{
+  "Comment": "Large CSV Processing with Chunking - Handles files with 100K+ records",
+  "StartAt": "InitializeProcessing",
+  "States": {
+    "InitializeProcessing": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${CSVInitializerFunction}",
+        "Payload": {
+          "task_id.$": "$.task_id",
+          "s3_key.$": "$.s3_key",
+          "question_id.$": "$.question_id",
+          "start_date.$": "$.start_date",
+          "end_date.$": "$.end_date",
+          "bucket_name.$": "$.bucket_name"
+        }
+      },
+      "ResultPath": "$.initialization",
+      "Next": "CheckInitializationResult",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "HandleInitializationFailure",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    
+    "CheckInitializationResult": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.initialization.Payload.success",
+          "BooleanEquals": true,
+          "Next": "ProcessChunks"
+        }
+      ],
+      "Default": "HandleInitializationFailure"
+    },
+    
+    "ProcessChunks": {
+      "Type": "Map",
+      "ItemsPath": "$.initialization.Payload.chunks",
+      "MaxConcurrency": 5,
+      "ResultPath": "$.chunk_results",
+      "Iterator": {
+        "StartAt": "ProcessSingleChunk",
+        "States": {
+          "ProcessSingleChunk": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${ChunkProcessorFunction}",
+              "Payload": {
+                "task_id.$": "$.task_id",
+                "chunk_id.$": "$.chunk_id",
+                "s3_key.$": "$.s3_key",
+                "start_row.$": "$.start_row",
+                "end_row.$": "$.end_row",
+                "question_id.$": "$.question_id",
+                "bucket_name.$": "$.bucket_name"
+              }
+            },
+            "End": true,
+            "Retry": [
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 2,
+                "BackoffRate": 2.0
+              },
+              {
+                "ErrorEquals": ["States.TaskFailed"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 1,
+                "BackoffRate": 2.0
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.chunk_error",
+                "Next": "HandleChunkFailure"
+              }
+            ]
+          },
+          
+          "HandleChunkFailure": {
+            "Type": "Pass",
+            "Parameters": {
+              "chunk_id.$": "$.chunk_id",
+              "error.$": "$.chunk_error",
+              "status": "FAILED"
+            },
+            "End": true
+          }
+        }
+      },
+      "Next": "AggregateResults",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "HandleProcessingFailure",
+          "ResultPath": "$.processing_error"
+        }
+      ]
+    },
+    
+    "AggregateResults": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ResultAggregatorFunction}",
+        "Payload": {
+          "task_id.$": "$.task_id",
+          "chunk_results.$": "$.chunk_results",
+          "initialization.$": "$.initialization.Payload"
+        }
+      },
+      "ResultPath": "$.aggregation",
+      "Next": "ProcessingComplete",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "HandleAggregationFailure",
+          "ResultPath": "$.aggregation_error"
+        }
+      ]
+    },
+    
+    "ProcessingComplete": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "COMPLETED",
+        "task_id.$": "$.task_id",
+        "final_result.$": "$.aggregation.Payload"
+      },
+      "End": true
+    },
+    
+    "HandleInitializationFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ResultAggregatorFunction}",
+        "Payload": {
+          "task_id.$": "$.task_id",
+          "error_type": "INITIALIZATION_FAILED",
+          "error_details.$": "$.error"
+        }
+      },
+      "Next": "ProcessingFailed"
+    },
+    
+    "HandleProcessingFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ResultAggregatorFunction}",
+        "Payload": {
+          "task_id.$": "$.task_id",
+          "error_type": "PROCESSING_FAILED", 
+          "error_details.$": "$.processing_error"
+        }
+      },
+      "Next": "ProcessingFailed"
+    },
+    
+    "HandleAggregationFailure": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "FAILED",
+        "task_id.$": "$.task_id",
+        "error_type": "AGGREGATION_FAILED",
+        "error_details.$": "$.aggregation_error"
+      },
+      "Next": "ProcessingFailed"
+    },
+    
+    "ProcessingFailed": {
+      "Type": "Fail",
+      "Cause": "CSV processing workflow failed",
+      "Error": "ProcessingError"
+    }
+  }
+}

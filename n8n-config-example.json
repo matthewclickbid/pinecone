@@ -1,0 +1,41 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "url": "=https://wr0t7qff1f.execute-api.us-east-1.amazonaws.com/dev/process?start_date={{ $json.start_date }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "62jtdXZX035M78uHYGvQu1TV6ZBMZkkh6mqoTzJE"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 900000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        320,
+        -80
+      ],
+      "id": "7a5b0ad6-f8cc-4797-93cb-1c96ad262b79",
+      "name": "HTTP Request"
+    }
+  ],
+  "connections": {
+    "HTTP Request": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6b4c5bc989973336dcf661754a776f35e2246abb77ad4bb4f3877af46754111d"
+  }
+}

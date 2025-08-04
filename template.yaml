@@ -1,0 +1,703 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Vectordb Catchup - Lambda function to process Metabase data and store in Pinecone'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+  
+  MetabaseUrl:
+    Type: String
+    Description: Metabase base URL
+    Default: https://cbmetabase.com
+  
+  MetabaseApiKey:
+    Type: String
+    Description: Metabase API key
+    NoEcho: true
+    Default: mb_N3AJKKNi1HmqlDq7bkAJ+5LdUTVYid1O55zWJZKLC7U=
+  
+  MetabaseQuestionId:
+    Type: String
+    Description: Metabase question ID
+    Default: "232"
+  
+  ApiKey:
+    Type: String
+    Description: API key for authentication
+    NoEcho: true
+    Default: 62jtdXZX035M78uHYGvQu1TV6ZBMZkkh6mqoTzJE
+  
+  PineconeApiKey:
+    Type: String
+    Description: Pinecone API key
+    NoEcho: true
+    Default: pcsk_6Wr3Ap_AQVR54skX4UGjMUAc2Bh1aceJA658ETykxWanSggLweFDz7BuTUjSvzSHYfe5Nw
+  
+  PineconeIndexName:
+    Type: String
+    Description: Pinecone index name
+    Default: clickbid
+  
+  PineconeEnvironment:
+    Type: String
+    Description: Pinecone environment
+    Default: us-east-1
+  
+  OpenAiApiKey:
+    Type: String
+    Description: OpenAI API key
+    NoEcho: true
+  
+  S3BucketName:
+    Type: String
+    Description: S3 bucket name for CSV files
+    Default: "pineconeuploads"
+
+Globals:
+  Function:
+    Timeout: 900  # 15 minutes max for individual functions
+    MemorySize: 1024
+    Runtime: python3.9
+    Environment:
+      Variables:
+        METABASE_URL: !Ref MetabaseUrl
+        METABASE_API_KEY: !Ref MetabaseApiKey
+        METABASE_QUESTION_ID: !Ref MetabaseQuestionId
+        API_KEY: !Ref ApiKey
+        PINECONE_API_KEY: !Ref PineconeApiKey
+        PINECONE_INDEX_NAME: !Ref PineconeIndexName
+        PINECONE_ENVIRONMENT: !Ref PineconeEnvironment
+        OPENAI_API_KEY: !Ref OpenAiApiKey
+        DYNAMODB_TABLE_NAME: !Ref TaskTable
+        ASYNC_FUNCTION_NAME: !Sub 'vectordb-processing-async-${Environment}'
+        S3_BUCKET_NAME: !Ref S3BucketName
+
+Resources:
+  # DynamoDB Table for Task Management
+  TaskTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'vectordb-tasks-${Environment}'
+      AttributeDefinitions:
+        - AttributeName: task_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: task_id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: VectordbCatchup
+
+  # DynamoDB Table for Processing Locks
+  LockTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'vectordb-tasks-${Environment}-locks'
+      AttributeDefinitions:
+        - AttributeName: lock_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: lock_key
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: VectordbCatchup
+
+  # Lambda Function for Processing
+  ProcessingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'vectordb-processing-${Environment}'
+      CodeUri: .
+      Handler: main_handler.lambda_handler
+      Timeout: 900  # 15 minutes
+      MemorySize: 1024
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TaskTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LockTable
+        - Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/vectordb-processing-${Environment}*'
+          - Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+            Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:vectordb-processing-async-${Environment}'
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+            Resource: 
+              - !Sub 'arn:aws:s3:::${S3BucketName}'
+              - !Sub 'arn:aws:s3:::${S3BucketName}/*'
+          - Effect: Allow
+            Action:
+              - states:StartExecution
+            Resource: !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:vectordb-csv-processing-${Environment}'
+      Environment:
+        Variables:
+          STEP_FUNCTIONS_ARN: !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:vectordb-csv-processing-${Environment}'
+      Events:
+        ProcessApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref VectordbApi
+            Path: /process
+            Method: get
+            Auth:
+              ApiKeyRequired: true
+      Tags:
+        Environment: !Ref Environment
+        Application: VectordbCatchup
+
+  # Lambda Function for Async Processing
+  AsyncProcessingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'vectordb-processing-async-${Environment}'
+      CodeUri: .
+      Handler: async_handler.async_process_handler
+      Timeout: 900  # 15 minutes
+      MemorySize: 1024
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TaskTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LockTable
+        - Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/vectordb-processing-async-${Environment}*'
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+            Resource: 
+              - !Sub 'arn:aws:s3:::${S3BucketName}'
+              - !Sub 'arn:aws:s3:::${S3BucketName}/*'
+      Tags:
+        Environment: !Ref Environment
+        Application: VectordbCatchup
+
+  # Lambda Function for Task Status
+  TaskStatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'vectordb-task-status-${Environment}'
+      CodeUri: .
+      Handler: task_status.get_task_status
+      Timeout: 30
+      MemorySize: 512
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref TaskTable
+        - Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/vectordb-task-status-${Environment}*'
+      Events:
+        StatusApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref VectordbApi
+            Path: /status
+            Method: get
+            Auth:
+              ApiKeyRequired: true
+      Tags:
+        Environment: !Ref Environment
+        Application: VectordbCatchup
+
+  # Step Functions Lambda Functions
+  CSVInitializerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'vectordb-csv-initializer-${Environment}'
+      CodeUri: .
+      Handler: step_functions/csv_initializer.lambda_handler
+      Timeout: 300  # 5 minutes
+      MemorySize: 512
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TaskTable
+        - Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:HeadObject
+            Resource: 
+              - !Sub 'arn:aws:s3:::${S3BucketName}'
+              - !Sub 'arn:aws:s3:::${S3BucketName}/*'
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/vectordb-csv-initializer-${Environment}*'
+      Tags:
+        Environment: !Ref Environment
+        Application: VectordbCatchup
+
+  ChunkProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'vectordb-chunk-processor-${Environment}'
+      CodeUri: .
+      Handler: step_functions/chunk_processor.lambda_handler
+      Timeout: 900  # 15 minutes - same as original async function
+      MemorySize: 1024
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TaskTable
+        - Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource: 
+              - !Sub 'arn:aws:s3:::${S3BucketName}'
+              - !Sub 'arn:aws:s3:::${S3BucketName}/*'
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/vectordb-chunk-processor-${Environment}*'
+      Tags:
+        Environment: !Ref Environment
+        Application: VectordbCatchup
+
+  ResultAggregatorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'vectordb-result-aggregator-${Environment}'
+      CodeUri: .
+      Handler: step_functions/result_aggregator.lambda_handler
+      Timeout: 300  # 5 minutes
+      MemorySize: 512
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TaskTable
+        - Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/vectordb-result-aggregator-${Environment}*'
+      Tags:
+        Environment: !Ref Environment
+        Application: VectordbCatchup
+
+  # Step Functions State Machine
+  CSVProcessingStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub 'vectordb-csv-processing-${Environment}'
+      DefinitionString: !Sub |
+        {
+          "Comment": "Large CSV Processing with Chunking - Handles files with 100K+ records",
+          "StartAt": "InitializeProcessing",
+          "States": {
+            "InitializeProcessing": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${CSVInitializerFunction}",
+                "Payload": {
+                  "task_id.$": "$.task_id",
+                  "s3_key.$": "$.s3_key",
+                  "question_id.$": "$.question_id",
+                  "start_date.$": "$.start_date",
+                  "end_date.$": "$.end_date",
+                  "bucket_name.$": "$.bucket_name"
+                }
+              },
+              "ResultPath": "$.initialization",
+              "Next": "CheckInitializationResult",
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "HandleInitializationFailure",
+                  "ResultPath": "$.error"
+                }
+              ]
+            },
+            "CheckInitializationResult": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.initialization.Payload.success",
+                  "BooleanEquals": true,
+                  "Next": "ProcessChunks"
+                }
+              ],
+              "Default": "HandleInitializationFailure"
+            },
+            "ProcessChunks": {
+              "Type": "Map",
+              "ItemsPath": "$.initialization.Payload.chunks",
+              "MaxConcurrency": 5,
+              "ResultPath": "$.chunk_results",
+              "Iterator": {
+                "StartAt": "ProcessSingleChunk",
+                "States": {
+                  "ProcessSingleChunk": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::lambda:invoke",
+                    "Parameters": {
+                      "FunctionName": "${ChunkProcessorFunction}",
+                      "Payload": {
+                        "task_id.$": "$.task_id",
+                        "chunk_id.$": "$.chunk_id",
+                        "s3_key.$": "$.s3_key",
+                        "start_row.$": "$.start_row",
+                        "end_row.$": "$.end_row",
+                        "question_id.$": "$.question_id",
+                        "bucket_name.$": "$.bucket_name"
+                      }
+                    },
+                    "End": true,
+                    "Retry": [
+                      {
+                        "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+                        "IntervalSeconds": 2,
+                        "MaxAttempts": 2,
+                        "BackoffRate": 2.0
+                      },
+                      {
+                        "ErrorEquals": ["States.TaskFailed"],
+                        "IntervalSeconds": 5,
+                        "MaxAttempts": 1,
+                        "BackoffRate": 2.0
+                      }
+                    ],
+                    "Catch": [
+                      {
+                        "ErrorEquals": ["States.ALL"],
+                        "ResultPath": "$.chunk_error",
+                        "Next": "HandleChunkFailure"
+                      }
+                    ]
+                  },
+                  "HandleChunkFailure": {
+                    "Type": "Pass",
+                    "Parameters": {
+                      "chunk_id.$": "$.chunk_id",
+                      "error.$": "$.chunk_error",
+                      "status": "FAILED"
+                    },
+                    "End": true
+                  }
+                }
+              },
+              "Next": "AggregateResults",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "HandleProcessingFailure",
+                  "ResultPath": "$.processing_error"
+                }
+              ]
+            },
+            "AggregateResults": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ResultAggregatorFunction}",
+                "Payload": {
+                  "task_id.$": "$.task_id",
+                  "chunk_results.$": "$.chunk_results",
+                  "initialization.$": "$.initialization.Payload"
+                }
+              },
+              "ResultPath": "$.aggregation",
+              "Next": "ProcessingComplete",
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "HandleAggregationFailure",
+                  "ResultPath": "$.aggregation_error"
+                }
+              ]
+            },
+            "ProcessingComplete": {
+              "Type": "Pass",
+              "Parameters": {
+                "status": "COMPLETED",
+                "task_id.$": "$.task_id",
+                "final_result.$": "$.aggregation.Payload"
+              },
+              "End": true
+            },
+            "HandleInitializationFailure": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ResultAggregatorFunction}",
+                "Payload": {
+                  "task_id.$": "$.task_id",
+                  "error_type": "INITIALIZATION_FAILED",
+                  "error_details.$": "$.error"
+                }
+              },
+              "Next": "ProcessingFailed"
+            },
+            "HandleProcessingFailure": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ResultAggregatorFunction}",
+                "Payload": {
+                  "task_id.$": "$.task_id",
+                  "error_type": "PROCESSING_FAILED", 
+                  "error_details.$": "$.processing_error"
+                }
+              },
+              "Next": "ProcessingFailed"
+            },
+            "HandleAggregationFailure": {
+              "Type": "Pass",
+              "Parameters": {
+                "status": "FAILED",
+                "task_id.$": "$.task_id",
+                "error_type": "AGGREGATION_FAILED",
+                "error_details.$": "$.aggregation_error"
+              },
+              "Next": "ProcessingFailed"
+            },
+            "ProcessingFailed": {
+              "Type": "Fail",
+              "Cause": "CSV processing workflow failed",
+              "Error": "ProcessingError"
+            }
+          }
+        }
+      RoleArn: !GetAtt StepFunctionsExecutionRole.Arn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: VectordbCatchup
+
+  # IAM Role for Step Functions
+  StepFunctionsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'vectordb-stepfunctions-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionsExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt CSVInitializerFunction.Arn
+                  - !GetAtt ChunkProcessorFunction.Arn
+                  - !GetAtt ResultAggregatorFunction.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                Resource: "*"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: VectordbCatchup
+
+  # API Gateway
+  VectordbApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub 'vectordb-api-${Environment}'
+      StageName: !Ref Environment
+      Auth:
+        ApiKeyRequired: true
+        UsagePlan:
+          CreateUsagePlan: PER_API
+          Description: Usage plan for Vectordb API
+          Quota:
+            Limit: 1000
+            Period: MONTH
+          Throttle:
+            BurstLimit: 10
+            RateLimit: 5
+      Cors:
+        AllowMethods: "'GET,OPTIONS'"
+        AllowHeaders: "'Content-Type,x-api-key'"
+        AllowOrigin: "'*'"
+      Tags:
+        Environment: !Ref Environment
+        Application: VectordbCatchup
+
+  # API Key
+  VectordbApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: !Sub 'vectordb-api-key-${Environment}'
+      Description: API key for Vectordb API
+      Enabled: true
+      Value: !Ref ApiKey
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: VectordbCatchup
+
+
+  # CloudWatch Log Groups
+  ProcessingLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/vectordb-processing-${Environment}'
+      RetentionInDays: 30
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: VectordbCatchup
+
+  TaskStatusLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/vectordb-task-status-${Environment}'
+      RetentionInDays: 30
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: VectordbCatchup
+
+  AsyncProcessingLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/vectordb-processing-async-${Environment}'
+      RetentionInDays: 30
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: VectordbCatchup
+
+  # CloudWatch Alarms
+  ProcessingErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'vectordb-processing-errors-${Environment}'
+      AlarmDescription: 'Alarm for processing function errors'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ProcessingFunction
+      TreatMissingData: notBreaching
+
+  ProcessingDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'vectordb-processing-duration-${Environment}'
+      AlarmDescription: 'Alarm for processing function duration'
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 840000  # 14 minutes in milliseconds
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ProcessingFunction
+      TreatMissingData: notBreaching
+
+Outputs:
+  ApiEndpoint:
+    Description: 'API Gateway endpoint URL'
+    Value: !Sub 'https://${VectordbApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'
+
+  ProcessEndpoint:
+    Description: 'Process endpoint URL'
+    Value: !Sub 'https://${VectordbApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/process'
+    Export:
+      Name: !Sub '${AWS::StackName}-ProcessEndpoint'
+
+  StatusEndpoint:
+    Description: 'Status endpoint URL'
+    Value: !Sub 'https://${VectordbApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/status'
+    Export:
+      Name: !Sub '${AWS::StackName}-StatusEndpoint'
+
+  TaskTableName:
+    Description: 'DynamoDB table name for tasks'
+    Value: !Ref TaskTable
+    Export:
+      Name: !Sub '${AWS::StackName}-TaskTableName'
+
+  ApiKeyId:
+    Description: 'API Key ID'
+    Value: !Ref VectordbApiKey
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiKeyId'
