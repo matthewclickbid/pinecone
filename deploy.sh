@@ -40,7 +40,7 @@ fi
 
 # Build the application
 echo "Building SAM application..."
-sam build --use-container
+sam build
 
 # Deploy the application
 echo "Deploying SAM application..."

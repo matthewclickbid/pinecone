@@ -9,6 +9,7 @@ from services.openai_client import OpenAIClient
 from services.pinecone_client import PineconeClient
 from services.dynamodb_client import DynamoDBClient
 from utils.text_sanitizer import sanitize_text
+from utils.metadata_processor import process_metadata_for_pinecone, extract_namespace_from_record
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -85,7 +86,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         # Process records in this chunk
         processed_count = 0
         failed_count = 0
-        vectors_to_upsert = []
+        vectors_by_namespace = {}  # Group vectors by namespace
         processed_record_ids = set()
         total_upserted_count = 0
         
@@ -94,6 +95,9 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 # Extract required fields
                 record_id = record.get('id')
                 formatted_text = record.get('formatted_text')
+                
+                # Extract namespace from record_type
+                namespace = extract_namespace_from_record(record, 'record_type')
                 
                 # Validate required fields
                 if not all([record_id, formatted_text]):
@@ -129,8 +133,12 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 # Remove fields that have special handling
                 metadata.pop('id', None)  # Used for vector ID
                 metadata.pop('formatted_text', None)  # Becomes 'text'
+                metadata.pop('record_type', None)  # Used for namespace
                 
-                # Add processed text field
+                # Process metadata to remove commas and properly type fields
+                metadata = process_metadata_for_pinecone(metadata, preserve_formatted_text=False)
+                
+                # Add processed text field (preserving commas in formatted_text)
                 metadata['text'] = sanitized_text
                 
                 # Add processing metadata
@@ -142,16 +150,16 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     'question_id': str(question_id)
                 })
                 
-                # Convert all values to strings for Pinecone compatibility
-                metadata = {k: str(v) for k, v in metadata.items()}
-                
                 vector_data = {
                     'id': vector_id,
                     'values': embedding,
                     'metadata': metadata
                 }
                 
-                vectors_to_upsert.append(vector_data)
+                # Group vectors by namespace
+                if namespace not in vectors_by_namespace:
+                    vectors_by_namespace[namespace] = []
+                vectors_by_namespace[namespace].append(vector_data)
                 processed_count += 1
                 
                 # Log progress for chunks
@@ -159,19 +167,33 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     logger.info(f"{chunk_id}: Processed {processed_count}/{actual_records} records")
                 
                 # Batch upsert every 500 vectors to manage memory
-                if len(vectors_to_upsert) >= 500:
-                    batch_upserted = upsert_vectors_batch(pinecone_client, vectors_to_upsert, chunk_id)
-                    total_upserted_count += batch_upserted
-                    vectors_to_upsert = []
+                # Check if any namespace has accumulated enough vectors
+                should_upsert = False
+                for ns, vectors in vectors_by_namespace.items():
+                    if len(vectors) >= 500:
+                        should_upsert = True
+                        break
+                
+                if should_upsert:
+                    # Upsert vectors for namespaces with >= 500 vectors
+                    for ns, vectors in list(vectors_by_namespace.items()):
+                        if len(vectors) >= 500:
+                            batch_upserted = upsert_vectors_batch(pinecone_client, vectors, chunk_id, namespace=ns)
+                            total_upserted_count += batch_upserted
+                            vectors_by_namespace[ns] = []
                 
             except Exception as e:
                 logger.error(f"Error processing record {record_id} in {chunk_id}: {e}")
                 failed_count += 1
         
         # Final batch upload if any vectors remain
-        if vectors_to_upsert:
-            batch_upserted = upsert_vectors_batch(pinecone_client, vectors_to_upsert, chunk_id)
-            total_upserted_count += batch_upserted
+        has_remaining = any(len(vectors) > 0 for vectors in vectors_by_namespace.values())
+        if has_remaining:
+            # Upsert remaining vectors for each namespace
+            for ns, vectors in vectors_by_namespace.items():
+                if vectors:
+                    batch_upserted = upsert_vectors_batch(pinecone_client, vectors, chunk_id, namespace=ns)
+                    total_upserted_count += batch_upserted
         
         # Update chunk completion status
         try:
@@ -215,7 +237,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         )
 
 
-def upsert_vectors_batch(pinecone_client: PineconeClient, vectors: List[Dict], chunk_id: str) -> int:
+def upsert_vectors_batch(pinecone_client: PineconeClient, vectors: List[Dict], chunk_id: str, namespace: str = None) -> int:
     """
     Upsert a batch of vectors to Pinecone with error handling.
     
@@ -223,21 +245,23 @@ def upsert_vectors_batch(pinecone_client: PineconeClient, vectors: List[Dict], c
         pinecone_client: Pinecone client instance
         vectors: List of vector data to upsert
         chunk_id: Chunk identifier for logging
+        namespace: Optional namespace to upsert vectors into
         
     Returns:
         int: Number of vectors successfully upserted
     """
     try:
-        logger.info(f"{chunk_id}: Upserting batch of {len(vectors)} vectors to Pinecone")
+        namespace_msg = f" to namespace '{namespace}'" if namespace else " to default namespace"
+        logger.info(f"{chunk_id}: Upserting batch of {len(vectors)} vectors{namespace_msg}")
         
-        pinecone_response = pinecone_client.upsert_vectors(vectors)
+        pinecone_response = pinecone_client.upsert_vectors(vectors, namespace=namespace)
         batch_upserted_count = pinecone_response.get('upserted_count', 0)
         
-        logger.info(f"{chunk_id}: Successfully upserted {batch_upserted_count} vectors")
+        logger.info(f"{chunk_id}: Successfully upserted {batch_upserted_count} vectors{namespace_msg}")
         return batch_upserted_count
         
     except Exception as e:
-        logger.error(f"{chunk_id}: Pinecone upsert failed: {e}")
+        logger.error(f"{chunk_id}: Pinecone upsert failed for namespace '{namespace}': {e}")
         raise
 
 

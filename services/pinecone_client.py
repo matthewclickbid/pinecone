@@ -24,7 +24,7 @@ class PineconeClient:
             logger.error(f"Failed to initialize Pinecone client: {e}")
             raise
 
-    def upsert_vectors(self, vectors_data: List[Dict[str, Any]], batch_size: int = 100) -> Dict[str, Any]:
+    def upsert_vectors(self, vectors_data: List[Dict[str, Any]], batch_size: int = 100, namespace: str = None) -> Dict[str, Any]:
         """
         Upsert vectors to the Pinecone index in batches to avoid size limits.
         Each item in vectors_data should have 'id', 'values', and optional 'metadata'.
@@ -32,13 +32,15 @@ class PineconeClient:
         Args:
             vectors_data: List of vector dictionaries to upsert
             batch_size: Number of vectors to process per batch (default: 100)
+            namespace: Optional namespace to upsert vectors into
         
         Returns:
             Aggregated response from all batch operations
         """
         try:
             total_vectors = len(vectors_data)
-            logger.info(f"Starting upsert: {total_vectors} vectors to index '{self.index_name}' in batches of {batch_size}")
+            namespace_msg = f" in namespace '{namespace}'" if namespace else " in default namespace"
+            logger.info(f"Starting upsert: {total_vectors} vectors to index '{self.index_name}'{namespace_msg} in batches of {batch_size}")
             
             if total_vectors == 0:
                 logger.warning("No vectors provided for upsert - returning early")
@@ -63,7 +65,11 @@ class PineconeClient:
                 
                 try:
                     logger.info(f"Calling Pinecone index.upsert() for batch {batch_num}")
-                    response = self.index.upsert(vectors=batch)
+                    # Add namespace parameter if provided
+                    upsert_kwargs = {'vectors': batch}
+                    if namespace is not None:
+                        upsert_kwargs['namespace'] = namespace
+                    response = self.index.upsert(**upsert_kwargs)
                     logger.info(f"Batch {batch_num} Pinecone response: {response}")
                     
                     responses.append(response)

@@ -39,7 +39,19 @@ class DynamoDBClient:
         else:
             return obj
     
-    def create_task(self, start_date: str, end_date: str, total_records: int = 0) -> str:
+    def _convert_to_dynamodb_format(self, obj):
+        """Convert Python types to DynamoDB-compatible formats."""
+        if isinstance(obj, float):
+            # Convert float to Decimal for DynamoDB
+            return Decimal(str(obj))
+        elif isinstance(obj, list):
+            return [self._convert_to_dynamodb_format(item) for item in obj]
+        elif isinstance(obj, dict):
+            return {key: self._convert_to_dynamodb_format(value) for key, value in obj.items()}
+        else:
+            return obj
+    
+    def create_task(self, start_date: str, end_date: str, total_records: int = 0, task_type: str = 'data_processing') -> str:
         """
         Create a new task in DynamoDB.
         
@@ -47,6 +59,7 @@ class DynamoDBClient:
             start_date (str): Start date for the task
             end_date (str): End date for the task
             total_records (int): Total number of records to process
+            task_type (str): Type of task (data_processing, namespace_migration)
             
         Returns:
             str: Task ID
@@ -58,6 +71,7 @@ class DynamoDBClient:
             item = {
                 'task_id': task_id,
                 'status': 'PENDING',
+                'task_type': task_type,
                 'start_date': start_date,
                 'end_date': end_date,
                 'total_records': total_records,
@@ -98,7 +112,7 @@ class DynamoDBClient:
             for key, value in kwargs.items():
                 if key not in ['task_id']:  # Skip primary key
                     update_expression += f", {key} = :{key}"
-                    expression_attribute_values[f":{key}"] = value
+                    expression_attribute_values[f":{key}"] = self._convert_to_dynamodb_format(value)
             
             self.table.update_item(
                 Key={'task_id': task_id},
@@ -216,12 +230,20 @@ class DynamoDBClient:
             
             # Create chunk status mapping
             chunk_status = {}
+            chunk_processed = {}
+            chunk_failed = {}
+            chunk_vectors = {}
+            chunk_errors = {}
+            
             for chunk in chunks_metadata:
-                chunk_status[chunk['chunk_id']] = 'PENDING'
+                chunk_id = chunk['chunk_id']
+                chunk_status[chunk_id] = 'PENDING'
+                # Initialize other maps as empty for each chunk
+                # These will be populated when chunks are processed
             
             self.table.update_item(
                 Key={'task_id': task_id},
-                UpdateExpression='SET #status = :status, updated_at = :updated_at, total_chunks = :total_chunks, estimated_total_records = :estimated_total_records, completed_chunks = :completed_chunks, failed_chunks = :failed_chunks, chunk_status = :chunk_status',
+                UpdateExpression='SET #status = :status, updated_at = :updated_at, total_chunks = :total_chunks, estimated_total_records = :estimated_total_records, completed_chunks = :completed_chunks, failed_chunks = :failed_chunks, chunk_status = :chunk_status, chunk_processed = :chunk_processed, chunk_failed = :chunk_failed, chunk_vectors = :chunk_vectors, chunk_errors = :chunk_errors',
                 ExpressionAttributeNames={'#status': 'status'},
                 ExpressionAttributeValues={
                     ':status': 'INITIALIZING',
@@ -230,7 +252,11 @@ class DynamoDBClient:
                     ':estimated_total_records': estimated_total_records,
                     ':completed_chunks': 0,
                     ':failed_chunks': 0,
-                    ':chunk_status': chunk_status
+                    ':chunk_status': chunk_status,
+                    ':chunk_processed': chunk_processed,
+                    ':chunk_failed': chunk_failed,
+                    ':chunk_vectors': chunk_vectors,
+                    ':chunk_errors': chunk_errors
                 }
             )
             
@@ -265,22 +291,29 @@ class DynamoDBClient:
                 ':updated_at': current_time
             }
             
-            # Add optional fields
+            # Add optional fields - use if_not_exists to ensure maps exist
             if error_message:
-                update_expression += ', chunk_errors.#chunk_id = :error'
+                update_expression += ', chunk_errors = if_not_exists(chunk_errors, :empty_map), chunk_errors.#chunk_id = :error'
                 expression_attribute_values[':error'] = error_message
+                expression_attribute_values[':empty_map'] = {}
             
             if processed_records is not None:
-                update_expression += ', chunk_processed.#chunk_id = :processed'
+                update_expression += ', chunk_processed = if_not_exists(chunk_processed, :empty_map), chunk_processed.#chunk_id = :processed'
                 expression_attribute_values[':processed'] = processed_records
+                if ':empty_map' not in expression_attribute_values:
+                    expression_attribute_values[':empty_map'] = {}
             
             if failed_records is not None:
-                update_expression += ', chunk_failed.#chunk_id = :failed'
+                update_expression += ', chunk_failed = if_not_exists(chunk_failed, :empty_map), chunk_failed.#chunk_id = :failed'
                 expression_attribute_values[':failed'] = failed_records
+                if ':empty_map' not in expression_attribute_values:
+                    expression_attribute_values[':empty_map'] = {}
             
             if vectors_upserted is not None:
-                update_expression += ', chunk_vectors.#chunk_id = :vectors'
+                update_expression += ', chunk_vectors = if_not_exists(chunk_vectors, :empty_map), chunk_vectors.#chunk_id = :vectors'
                 expression_attribute_values[':vectors'] = vectors_upserted
+                if ':empty_map' not in expression_attribute_values:
+                    expression_attribute_values[':empty_map'] = {}
             
             self.table.update_item(
                 Key={'task_id': task_id},
@@ -371,3 +404,113 @@ class DynamoDBClient:
             else:
                 logger.error(f"Error releasing processing lock: {e}")
                 # Don't raise - this is cleanup, shouldn't fail the main process
+    
+    def update_task_metadata(self, task_id: str, metadata: Dict[str, Any]) -> None:
+        """
+        Update task with metadata fields (for migration tracking).
+        
+        Args:
+            task_id (str): Task ID
+            metadata (Dict): Metadata fields to update
+        """
+        try:
+            update_expression_parts = []
+            expression_attribute_names = {}
+            expression_attribute_values = {
+                ':updated_at': datetime.utcnow().isoformat()
+            }
+            
+            for key, value in metadata.items():
+                if key == 'task_id':  # Skip primary key
+                    continue
+                
+                # Handle nested fields (e.g., migration_progress.phase)
+                if '.' in key:
+                    parts = key.split('.')
+                    safe_key = parts[0]
+                    nested_path = '.'.join(f'#{p}' for p in parts[1:])
+                    full_path = f'#{safe_key}.{nested_path}'
+                    
+                    for part in parts:
+                        expression_attribute_names[f'#{part}'] = part
+                else:
+                    safe_key = f'#{key}'
+                    full_path = safe_key
+                    expression_attribute_names[safe_key] = key
+                
+                value_key = f':{key.replace(".", "_")}'
+                update_expression_parts.append(f'{full_path} = {value_key}')
+                expression_attribute_values[value_key] = self._convert_to_dynamodb_format(value)
+            
+            if not update_expression_parts:
+                return
+            
+            update_expression = 'SET ' + ', '.join(update_expression_parts) + ', updated_at = :updated_at'
+            
+            self.table.update_item(
+                Key={'task_id': task_id},
+                UpdateExpression=update_expression,
+                ExpressionAttributeNames=expression_attribute_names if expression_attribute_names else None,
+                ExpressionAttributeValues=expression_attribute_values
+            )
+            
+            logger.debug(f"Updated task {task_id} metadata: {list(metadata.keys())}")
+            
+        except ClientError as e:
+            logger.error(f"Error updating task metadata for {task_id}: {e}")
+            raise
+    
+    def get_migration_tasks(self, status: Optional[str] = None) -> list:
+        """
+        Get all migration tasks, optionally filtered by status.
+        
+        Args:
+            status (str): Optional status filter
+            
+        Returns:
+            list: List of migration tasks
+        """
+        try:
+            if status:
+                response = self.table.scan(
+                    FilterExpression='task_type = :type AND #status = :status',
+                    ExpressionAttributeNames={'#status': 'status'},
+                    ExpressionAttributeValues={
+                        ':type': 'namespace_migration',
+                        ':status': status
+                    }
+                )
+            else:
+                response = self.table.scan(
+                    FilterExpression='task_type = :type',
+                    ExpressionAttributeValues={':type': 'namespace_migration'}
+                )
+            
+            tasks = response.get('Items', [])
+            
+            # Handle pagination
+            while 'LastEvaluatedKey' in response:
+                if status:
+                    response = self.table.scan(
+                        FilterExpression='task_type = :type AND #status = :status',
+                        ExpressionAttributeNames={'#status': 'status'},
+                        ExpressionAttributeValues={
+                            ':type': 'namespace_migration',
+                            ':status': status
+                        },
+                        ExclusiveStartKey=response['LastEvaluatedKey']
+                    )
+                else:
+                    response = self.table.scan(
+                        FilterExpression='task_type = :type',
+                        ExpressionAttributeValues={':type': 'namespace_migration'},
+                        ExclusiveStartKey=response['LastEvaluatedKey']
+                    )
+                tasks.extend(response.get('Items', []))
+            
+            # Convert Decimal objects
+            return [self._convert_decimal(task) for task in tasks]
+            
+        except ClientError as e:
+            logger.error(f"Error getting migration tasks: {e}")
+            raise

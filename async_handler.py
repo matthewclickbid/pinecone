@@ -10,6 +10,7 @@ from services.openai_client import OpenAIClient
 from services.pinecone_client import PineconeClient
 from services.dynamodb_client import DynamoDBClient
 from utils.text_sanitizer import sanitize_text
+from utils.metadata_processor import process_metadata_for_pinecone, extract_namespace_from_record
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -142,7 +143,7 @@ def async_process_handler(event, context):
                 # Process CSV in chunks to handle large files efficiently
                 processed_count = 0
                 failed_count = 0
-                vectors_to_upsert = []
+                vectors_by_namespace = {}  # Group vectors by namespace
                 processed_record_ids = set()
                 total_upserted_count = 0
                 chunk_count = 0
@@ -163,6 +164,9 @@ def async_process_handler(event, context):
                                 event_id = record.get('event_id')
                                 org_id = record.get('org_id')
                                 formatted_text = record.get('formatted_text')
+                                
+                                # Extract namespace from record_type
+                                namespace = extract_namespace_from_record(record, 'record_type')
                                 
                                 # Validate required fields
                                 if not all([record_id, formatted_text]):
@@ -199,8 +203,12 @@ def async_process_handler(event, context):
                                 # Remove fields that have special handling
                                 metadata.pop('id', None)  # Used for vector ID
                                 metadata.pop('formatted_text', None)  # Becomes 'text'
+                                metadata.pop('record_type', None)  # Used for namespace
                                 
-                                # Add processed text field
+                                # Process metadata to remove commas and properly type fields
+                                metadata = process_metadata_for_pinecone(metadata, preserve_formatted_text=False)
+                                
+                                # Add processed text field (preserving commas in formatted_text)
                                 metadata['text'] = sanitized_text
                                 
                                 # Add processing metadata
@@ -212,16 +220,16 @@ def async_process_handler(event, context):
                                     's3_key': s3_key
                                 })
                                 
-                                # Convert all values to strings for Pinecone compatibility
-                                metadata = {k: str(v) for k, v in metadata.items()}
-                                
                                 vector_data = {
                                     'id': vector_id,
                                     'values': embedding,
                                     'metadata': metadata
                                 }
                                 
-                                vectors_to_upsert.append(vector_data)
+                                # Group vectors by namespace
+                                if namespace not in vectors_by_namespace:
+                                    vectors_by_namespace[namespace] = []
+                                vectors_by_namespace[namespace].append(vector_data)
                                 processed_count += 1
                                 
                                 # Update progress
@@ -232,9 +240,14 @@ def async_process_handler(event, context):
                                     logger.warning(f"Processed {processed_count} records (chunk {chunk_count})")
                                 
                                 # Batch upsert every 500 vectors to manage memory
-                                if len(vectors_to_upsert) >= 500:
-                                    logger.warning(f"Upserting batch of {len(vectors_to_upsert)} vectors to Pinecone")
-                                    
+                                # Check if any namespace has accumulated enough vectors
+                                should_upsert = False
+                                for ns, vectors in vectors_by_namespace.items():
+                                    if len(vectors) >= 500:
+                                        should_upsert = True
+                                        break
+                                
+                                if should_upsert:
                                     # Initialize PineconeClient only when needed
                                     if 'pinecone_client' not in locals():
                                         try:
@@ -246,19 +259,23 @@ def async_process_handler(event, context):
                                             dynamodb_client.set_task_error(task_id, f"Pinecone initialization failed: {e}")
                                             raise
                                     
-                                    try:
-                                        pinecone_response = pinecone_client.upsert_vectors(vectors_to_upsert)
-                                        batch_upserted_count = pinecone_response.get('upserted_count', 0)
-                                        total_upserted_count += batch_upserted_count
-                                        logger.warning(f"Batch upserted: {batch_upserted_count} vectors. Total: {total_upserted_count}")
-                                        
-                                        # Clear the batch
-                                        vectors_to_upsert = []
-                                        
-                                    except Exception as upsert_error:
-                                        logger.error(f"CRITICAL: Pinecone upsert failed: {type(upsert_error).__name__}: {upsert_error}")
-                                        dynamodb_client.set_task_error(task_id, f"Pinecone upsert failed: {upsert_error}")
-                                        raise
+                                    # Upsert vectors for namespaces with >= 500 vectors
+                                    for ns, vectors in list(vectors_by_namespace.items()):
+                                        if len(vectors) >= 500:
+                                            try:
+                                                logger.warning(f"Upserting batch of {len(vectors)} vectors to namespace '{ns}'")
+                                                pinecone_response = pinecone_client.upsert_vectors(vectors, namespace=ns)
+                                                batch_upserted_count = pinecone_response.get('upserted_count', 0)
+                                                total_upserted_count += batch_upserted_count
+                                                logger.warning(f"Batch upserted: {batch_upserted_count} vectors to namespace '{ns}'. Total: {total_upserted_count}")
+                                                
+                                                # Clear the batch for this namespace
+                                                vectors_by_namespace[ns] = []
+                                                
+                                            except Exception as upsert_error:
+                                                logger.error(f"CRITICAL: Pinecone upsert failed for namespace '{ns}': {type(upsert_error).__name__}: {upsert_error}")
+                                                dynamodb_client.set_task_error(task_id, f"Pinecone upsert failed: {upsert_error}")
+                                                raise
                                 
                             except Exception as e:
                                 logger.error(f"Error processing record {record_id}: {e}")
@@ -266,8 +283,9 @@ def async_process_handler(event, context):
                                 dynamodb_client.increment_failed_records(task_id)
                                 
                     # Final batch upload if any vectors remain
-                    if vectors_to_upsert:
-                        logger.warning(f"Upserting final batch of {len(vectors_to_upsert)} vectors to Pinecone")
+                    has_remaining = any(len(vectors) > 0 for vectors in vectors_by_namespace.values())
+                    if has_remaining:
+                        logger.warning(f"Upserting final batches to Pinecone")
                         
                         # Initialize PineconeClient if not already done
                         if 'pinecone_client' not in locals():
@@ -280,16 +298,20 @@ def async_process_handler(event, context):
                                 dynamodb_client.set_task_error(task_id, f"Pinecone initialization failed: {e}")
                                 raise
                         
-                        try:
-                            pinecone_response = pinecone_client.upsert_vectors(vectors_to_upsert)
-                            batch_upserted_count = pinecone_response.get('upserted_count', 0)
-                            total_upserted_count += batch_upserted_count
-                            logger.warning(f"Final batch upserted: {batch_upserted_count} vectors. Total: {total_upserted_count}")
-                            
-                        except Exception as upsert_error:
-                            logger.error(f"CRITICAL: Final Pinecone upsert failed: {type(upsert_error).__name__}: {upsert_error}")
-                            dynamodb_client.set_task_error(task_id, f"Final Pinecone upsert failed: {upsert_error}")
-                            raise
+                        # Upsert remaining vectors for each namespace
+                        for ns, vectors in vectors_by_namespace.items():
+                            if vectors:
+                                try:
+                                    logger.warning(f"Upserting final batch of {len(vectors)} vectors to namespace '{ns}'")
+                                    pinecone_response = pinecone_client.upsert_vectors(vectors, namespace=ns)
+                                    batch_upserted_count = pinecone_response.get('upserted_count', 0)
+                                    total_upserted_count += batch_upserted_count
+                                    logger.warning(f"Final batch upserted: {batch_upserted_count} vectors to namespace '{ns}'. Total: {total_upserted_count}")
+                                    
+                                except Exception as upsert_error:
+                                    logger.error(f"CRITICAL: Final Pinecone upsert failed for namespace '{ns}': {type(upsert_error).__name__}: {upsert_error}")
+                                    dynamodb_client.set_task_error(task_id, f"Final Pinecone upsert failed: {upsert_error}")
+                                    raise
                     
                     # Set totals for summary
                     total_records = processed_count + failed_count

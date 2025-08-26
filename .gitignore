@@ -51,4 +51,4 @@ Thumbs.db
 parameters-*.json
 
 # Claude settings
-.claude/
+.claude/parameter_overrides.txt

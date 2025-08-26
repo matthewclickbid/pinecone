@@ -53,6 +53,20 @@ Parameters:
     Type: String
     Description: S3 bucket name for CSV files
     Default: "pineconeuploads"
+  
+  MigrationBatchSize:
+    Type: Number
+    Description: Batch size for namespace migration
+    Default: 100
+    MinValue: 10
+    MaxValue: 1000
+  
+  MigrationRateLimit:
+    Type: Number
+    Description: Rate limit (operations per second) for migration
+    Default: 10
+    MinValue: 1
+    MaxValue: 100
 
 Globals:
   Function:
@@ -72,6 +86,10 @@ Globals:
         DYNAMODB_TABLE_NAME: !Ref TaskTable
         ASYNC_FUNCTION_NAME: !Sub 'vectordb-processing-async-${Environment}'
         S3_BUCKET_NAME: !Ref S3BucketName
+        MIGRATION_BATCH_SIZE: !Ref MigrationBatchSize
+        MIGRATION_RATE_LIMIT: !Ref MigrationRateLimit
+        MIGRATION_ASYNC_FUNCTION_NAME: !Sub 'vectordb-migration-async-${Environment}'
+        MIGRATION_STATE_MACHINE_ARN: !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:vectordb-migration-${Environment}'
 
 Resources:
   # DynamoDB Table for Task Management
@@ -311,6 +329,134 @@ Resources:
         Environment: !Ref Environment
         Application: VectordbCatchup
 
+  # Migration Lambda Functions
+  MigrationHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'vectordb-migration-handler-${Environment}'
+      CodeUri: .
+      Handler: migrate_handler.migrate_namespaces_handler
+      Timeout: 60
+      MemorySize: 512
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TaskTable
+        - Statement:
+          - Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+            Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:vectordb-migration-async-${Environment}'
+          - Effect: Allow
+            Action:
+              - states:StartExecution
+            Resource: !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:vectordb-migration-${Environment}'
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/vectordb-migration-handler-${Environment}*'
+      Events:
+        MigrateApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref VectordbApi
+            Path: /migrate-namespaces
+            Method: get
+            Auth:
+              ApiKeyRequired: true
+      Tags:
+        Environment: !Ref Environment
+        Application: VectordbCatchup
+
+  MigrationAsyncFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'vectordb-migration-async-${Environment}'
+      CodeUri: .
+      Handler: migrate_handler.async_migration_handler
+      Timeout: 900  # 15 minutes
+      MemorySize: 1024
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TaskTable
+        - Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/vectordb-migration-async-${Environment}*'
+      Tags:
+        Environment: !Ref Environment
+        Application: VectordbCatchup
+
+  MigrationInventoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'vectordb-migration-inventory-${Environment}'
+      CodeUri: .
+      Handler: step_functions/migration_inventory.lambda_handler
+      Timeout: 300  # 5 minutes
+      MemorySize: 512
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TaskTable
+        - Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/vectordb-migration-inventory-${Environment}*'
+      Tags:
+        Environment: !Ref Environment
+        Application: VectordbCatchup
+
+  MigrationChunkProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'vectordb-migration-chunk-processor-${Environment}'
+      CodeUri: .
+      Handler: step_functions/migration_chunk_processor.lambda_handler
+      Timeout: 900  # 15 minutes
+      MemorySize: 1024
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TaskTable
+        - Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/vectordb-migration-chunk-processor-${Environment}*'
+      Tags:
+        Environment: !Ref Environment
+        Application: VectordbCatchup
+
+  MigrationResultAggregatorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'vectordb-migration-result-aggregator-${Environment}'
+      CodeUri: .
+      Handler: step_functions/migration_result_aggregator.lambda_handler
+      Timeout: 300  # 5 minutes
+      MemorySize: 512
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TaskTable
+        - Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/vectordb-migration-result-aggregator-${Environment}*'
+      Tags:
+        Environment: !Ref Environment
+        Application: VectordbCatchup
+
   # Step Functions State Machine
   CSVProcessingStateMachine:
     Type: AWS::StepFunctions::StateMachine
@@ -512,6 +658,260 @@ Resources:
           }
         }
       RoleArn: !GetAtt StepFunctionsExecutionRole.Arn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: VectordbCatchup
+
+  # Migration Step Functions State Machine
+  MigrationStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub 'vectordb-migration-${Environment}'
+      DefinitionString: !Sub |
+        {
+          "Comment": "Namespace Migration Workflow - Handles migration of up to 1M records",
+          "StartAt": "InventoryPhase",
+          "States": {
+            "InventoryPhase": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${MigrationInventoryFunction}",
+                "Payload": {
+                  "task_id.$": "$.task_id",
+                  "source_namespace.$": "$.source_namespace",
+                  "namespace_mapping.$": "$.namespace_mapping",
+                  "batch_size.$": "$.batch_size",
+                  "rate_limit.$": "$.rate_limit",
+                  "dry_run.$": "$.dry_run",
+                  "resume_token.$": "$.resume_token"
+                }
+              },
+              "ResultPath": "$.inventory",
+              "Next": "CheckInventoryResult",
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "HandleInventoryFailure",
+                  "ResultPath": "$.error"
+                }
+              ]
+            },
+            "CheckInventoryResult": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.inventory.Payload.success",
+                  "BooleanEquals": true,
+                  "Next": "MigrationPhase"
+                }
+              ],
+              "Default": "HandleInventoryFailure"
+            },
+            "MigrationPhase": {
+              "Type": "Map",
+              "ItemsPath": "$.inventory.Payload.chunks",
+              "MaxConcurrency": 10,
+              "ResultPath": "$.chunk_results",
+              "Iterator": {
+                "StartAt": "ProcessMigrationChunk",
+                "States": {
+                  "ProcessMigrationChunk": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::lambda:invoke",
+                    "Parameters": {
+                      "FunctionName": "${MigrationChunkProcessorFunction}",
+                      "Payload": {
+                        "chunk_id.$": "$.chunk_id",
+                        "task_id.$": "$.task_id",
+                        "source_namespace.$": "$.source_namespace",
+                        "namespace_mapping.$": "$.namespace_mapping",
+                        "start_offset.$": "$.start_offset",
+                        "end_offset.$": "$.end_offset",
+                        "batch_size.$": "$.batch_size",
+                        "rate_limit.$": "$.rate_limit",
+                        "dry_run.$": "$.dry_run"
+                      }
+                    },
+                    "End": true,
+                    "Retry": [
+                      {
+                        "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+                        "IntervalSeconds": 2,
+                        "MaxAttempts": 2,
+                        "BackoffRate": 2.0
+                      },
+                      {
+                        "ErrorEquals": ["States.TaskFailed"],
+                        "IntervalSeconds": 5,
+                        "MaxAttempts": 1,
+                        "BackoffRate": 2.0
+                      }
+                    ],
+                    "Catch": [
+                      {
+                        "ErrorEquals": ["States.ALL"],
+                        "ResultPath": "$.chunk_error",
+                        "Next": "HandleChunkFailure"
+                      }
+                    ]
+                  },
+                  "HandleChunkFailure": {
+                    "Type": "Pass",
+                    "Parameters": {
+                      "chunk_id.$": "$.chunk_id",
+                      "error.$": "$.chunk_error",
+                      "status": "FAILED"
+                    },
+                    "End": true
+                  }
+                }
+              },
+              "Next": "AggregateResults",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "HandleMigrationFailure",
+                  "ResultPath": "$.migration_error"
+                }
+              ]
+            },
+            "AggregateResults": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${MigrationResultAggregatorFunction}",
+                "Payload": {
+                  "task_id.$": "$.task_id",
+                  "chunk_results.$": "$.chunk_results",
+                  "inventory.$": "$.inventory.Payload.inventory",
+                  "source_namespace.$": "$.source_namespace",
+                  "namespace_mapping.$": "$.namespace_mapping",
+                  "dry_run.$": "$.dry_run"
+                }
+              },
+              "ResultPath": "$.aggregation",
+              "Next": "MigrationComplete",
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "HandleAggregationFailure",
+                  "ResultPath": "$.aggregation_error"
+                }
+              ]
+            },
+            "MigrationComplete": {
+              "Type": "Pass",
+              "Parameters": {
+                "status": "COMPLETED",
+                "task_id.$": "$.task_id",
+                "final_result.$": "$.aggregation.Payload"
+              },
+              "End": true
+            },
+            "HandleInventoryFailure": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${MigrationResultAggregatorFunction}",
+                "Payload": {
+                  "task_id.$": "$.task_id",
+                  "error_type": "INVENTORY_FAILED",
+                  "error_details.$": "$.error"
+                }
+              },
+              "Next": "MigrationFailed"
+            },
+            "HandleMigrationFailure": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${MigrationResultAggregatorFunction}",
+                "Payload": {
+                  "task_id.$": "$.task_id",
+                  "error_type": "MIGRATION_FAILED",
+                  "error_details.$": "$.migration_error"
+                }
+              },
+              "Next": "MigrationFailed"
+            },
+            "HandleAggregationFailure": {
+              "Type": "Pass",
+              "Parameters": {
+                "status": "FAILED",
+                "task_id.$": "$.task_id",
+                "error_type": "AGGREGATION_FAILED",
+                "error_details.$": "$.aggregation_error"
+              },
+              "Next": "MigrationFailed"
+            },
+            "MigrationFailed": {
+              "Type": "Fail",
+              "Cause": "Migration workflow failed",
+              "Error": "MigrationError"
+            }
+          }
+        }
+      RoleArn: !GetAtt MigrationStepFunctionsExecutionRole.Arn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: VectordbCatchup
+
+  # IAM Role for Migration Step Functions
+  MigrationStepFunctionsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'vectordb-migration-stepfunctions-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: MigrationStepFunctionsExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt MigrationInventoryFunction.Arn
+                  - !GetAtt MigrationChunkProcessorFunction.Arn
+                  - !GetAtt MigrationResultAggregatorFunction.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                Resource: "*"
       Tags:
         - Key: Environment
           Value: !Ref Environment
