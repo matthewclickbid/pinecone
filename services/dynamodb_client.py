@@ -284,36 +284,55 @@ class DynamoDBClient:
             current_time = datetime.utcnow().isoformat()
             
             # Build update expression dynamically
-            update_expression = 'SET chunk_status.#chunk_id = :status, updated_at = :updated_at'
+            # Start with basic updates that always happen
+            update_expression_parts = [
+                'chunk_status.#chunk_id = :status',
+                'updated_at = :updated_at'
+            ]
+            
             expression_attribute_names = {'#chunk_id': chunk_id}
             expression_attribute_values = {
                 ':status': status,
                 ':updated_at': current_time
             }
             
-            # Add optional fields - use if_not_exists to ensure maps exist
+            # Initialize all maps that need to exist
+            map_inits = []
             if error_message:
-                update_expression += ', chunk_errors = if_not_exists(chunk_errors, :empty_map), chunk_errors.#chunk_id = :error'
-                expression_attribute_values[':error'] = error_message
+                map_inits.append('chunk_errors = if_not_exists(chunk_errors, :empty_map)')
+            if processed_records is not None:
+                map_inits.append('chunk_processed = if_not_exists(chunk_processed, :empty_map)')
+            if failed_records is not None:
+                map_inits.append('chunk_failed = if_not_exists(chunk_failed, :empty_map)')
+            if vectors_upserted is not None:
+                map_inits.append('chunk_vectors = if_not_exists(chunk_vectors, :empty_map)')
+            
+            # Only add :empty_map if we have any map initializations
+            if map_inits:
                 expression_attribute_values[':empty_map'] = {}
             
+            # Add map initializations first
+            update_expression_parts.extend(map_inits)
+            
+            # Now add the specific field updates
+            if error_message:
+                update_expression_parts.append('chunk_errors.#chunk_id = :error')
+                expression_attribute_values[':error'] = error_message
+            
             if processed_records is not None:
-                update_expression += ', chunk_processed = if_not_exists(chunk_processed, :empty_map), chunk_processed.#chunk_id = :processed'
+                update_expression_parts.append('chunk_processed.#chunk_id = :processed')
                 expression_attribute_values[':processed'] = processed_records
-                if ':empty_map' not in expression_attribute_values:
-                    expression_attribute_values[':empty_map'] = {}
             
             if failed_records is not None:
-                update_expression += ', chunk_failed = if_not_exists(chunk_failed, :empty_map), chunk_failed.#chunk_id = :failed'
+                update_expression_parts.append('chunk_failed.#chunk_id = :failed')
                 expression_attribute_values[':failed'] = failed_records
-                if ':empty_map' not in expression_attribute_values:
-                    expression_attribute_values[':empty_map'] = {}
             
             if vectors_upserted is not None:
-                update_expression += ', chunk_vectors = if_not_exists(chunk_vectors, :empty_map), chunk_vectors.#chunk_id = :vectors'
+                update_expression_parts.append('chunk_vectors.#chunk_id = :vectors')
                 expression_attribute_values[':vectors'] = vectors_upserted
-                if ':empty_map' not in expression_attribute_values:
-                    expression_attribute_values[':empty_map'] = {}
+            
+            # Combine all parts into final expression
+            update_expression = 'SET ' + ', '.join(update_expression_parts)
             
             self.table.update_item(
                 Key={'task_id': task_id},

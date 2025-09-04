@@ -256,8 +256,8 @@ Resources:
       FunctionName: !Sub 'vectordb-csv-initializer-${Environment}'
       CodeUri: .
       Handler: step_functions/csv_initializer.lambda_handler
-      Timeout: 300  # 5 minutes
-      MemorySize: 512
+      Timeout: 900  # 15 minutes
+      MemorySize: 2048
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref TaskTable

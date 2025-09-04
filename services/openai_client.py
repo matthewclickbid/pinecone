@@ -9,10 +9,11 @@ logger = logging.getLogger(__name__)
 
 
 class OpenAIClient:
-    def __init__(self, rate_limit_per_second=10):
+    def __init__(self, rate_limit_per_second=10, timeout=30):
         openai.api_key = os.environ.get('OPENAI_API_KEY')
         self.rate_limit_per_second = rate_limit_per_second
         self.last_request_time = 0
+        self.timeout = timeout  # Default 30 seconds timeout for OpenAI requests
         
         if not os.environ.get('OPENAI_API_KEY'):
             raise ValueError("Missing OPENAI_API_KEY environment variable")
@@ -47,7 +48,8 @@ class OpenAIClient:
             
             response = openai.Embedding.create(
                 model="text-embedding-ada-002",
-                input=text
+                input=text,
+                timeout=self.timeout  # Add explicit timeout
             )
             
             embedding = response['data'][0]['embedding']
@@ -56,7 +58,11 @@ class OpenAIClient:
             return embedding
             
         except Exception as e:
-            logger.error(f"Error generating embedding: {e}")
+            # Log more details about the error
+            error_msg = f"Error generating embedding: {e}"
+            if "timeout" in str(e).lower():
+                error_msg = f"OpenAI request timed out after {self.timeout}s: {e}"
+            logger.error(error_msg)
             raise
     
     def get_embeddings_batch(self, texts: List[str]) -> List[List[float]]:

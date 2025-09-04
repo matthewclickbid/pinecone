@@ -103,7 +103,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             return create_error_response(error_msg)
         
         # Calculate optimal chunks
-        target_rows_per_chunk = 3500  # Target ~10 minutes processing per chunk
+        target_rows_per_chunk = 500  # Reduced chunk size to avoid Lambda timeouts
         
         chunks = []
         current_row = 2  # Start after header (row 1)

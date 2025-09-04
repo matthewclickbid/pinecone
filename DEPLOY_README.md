@@ -12,21 +12,24 @@ When you do sam deploy, make sure to increase the timeout because default is not
 
 When deploying updates to AWS Lambda functions, SAM may skip uploading if it detects the file hash hasn't changed. This can happen even when code has been modified. To ensure your changes are deployed:
 
-## Deployment Steps
+## CRITICAL: Complete Force Deploy Process
 
-### 1. Clean Build Artifacts (Required for code changes)
+### The following 3 steps MUST be executed in order to guarantee fresh deployment:
+
+### 1. Clean Build Artifacts (REQUIRED - Never Skip)
 ```bash
 rm -rf .aws-sam/
 ```
+**Why:** Removes cached build artifacts that may prevent new code from being packaged.
 
-### 2. Rebuild the Application
+### 2. Rebuild the Application (REQUIRED)
 ```bash
 sam build
-# or with container if Docker is running:
-# sam build --use-container
+# Note: Do NOT use --use-container since Docker is not installed
 ```
+**Why:** Creates fresh build artifacts from your current source code.
 
-### 3. Deploy with Force Upload
+### 3. Deploy with Force Upload (REQUIRED - Use These Exact Flags)
 ```bash
 sam deploy \
   --stack-name vectordb-catchup-dev \
@@ -38,6 +41,10 @@ sam deploy \
   --resolve-s3 \
   --force-upload
 ```
+**Why Critical Flags:**
+- `--force-upload`: Forces upload even if SAM thinks files haven't changed
+- `--s3-prefix "deploy-$(date +%s)"`: Uses unique timestamp to bypass S3 caching
+- Both flags MUST be used together for guaranteed fresh deployment
 
 ## Key Deployment Flags
 
