@@ -50,7 +50,7 @@
     "ProcessChunks": {
       "Type": "Map",
       "ItemsPath": "$.initialization.Payload.chunks",
-      "MaxConcurrency": 5,
+      "MaxConcurrency": 3,
       "ResultPath": "$.chunk_results",
       "Iterator": {
         "StartAt": "ProcessSingleChunk",

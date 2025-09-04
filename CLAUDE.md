@@ -25,6 +25,7 @@ API Gateway → Main Lambda → Async Lambda/Step Functions → [Metabase/S3] �
 - **Large File Support**: Step Functions workflow handles 100K+ record CSVs
 - **Rate Limiting**: Configurable rate limits for OpenAI API calls
 - **Batch Processing**: Pinecone upserts in configurable batch sizes
+- **Namespace Support**: Proper handling of Pinecone namespaces for data organization
 - **Comprehensive Monitoring**: CloudWatch alarms for errors and duration
 
 ## Project Structure
@@ -73,6 +74,7 @@ Headers: x-api-key: YOUR_API_KEY
 - `OPENAI_API_KEY`: OpenAI API key
 - `PINECONE_API_KEY`: Pinecone API key
 - `PINECONE_INDEX_NAME`: Target Pinecone index
+- `PINECONE_NAMESPACE`: Namespace for vector organization (default: "v2")
 - `DYNAMODB_TABLE_NAME`: Task tracking table
 - `S3_BUCKET_NAME`: Bucket for CSV files
 - `API_KEY`: API Gateway authentication key
@@ -121,13 +123,14 @@ curl -X GET 'https://API_ID.execute-api.us-east-1.amazonaws.com/dev/process?star
 
 ### S3 CSV Processing (Large Files)
 1. Validate parameters and S3 key
-2. Create task in DynamoDB
+2. Create task in DynamoDB with chunk tracking
 3. Trigger Step Functions state machine
-4. Initialize: Count rows, create chunks
+4. Initialize: Count rows, create chunks, initialize chunk statuses
 5. Process chunks in parallel (max 5 concurrent)
-6. Each chunk: Read CSV, generate embeddings, upsert
-7. Aggregate results from all chunks
-8. Update final task status
+6. Each chunk: Read CSV, generate embeddings, upsert with namespace
+7. Update individual chunk status in DynamoDB
+8. Aggregate results from all chunks
+9. Update final task status with totals
 
 ## Key Technical Details
 
@@ -183,6 +186,12 @@ The project includes comprehensive error handling but currently lacks formal tes
 1. **Unit Tests**: Test individual service clients and utilities
 2. **Integration Tests**: Test Lambda handlers with mocked AWS services
 3. **End-to-End Tests**: Test complete workflows with test data
+
+## Recent Updates (January 2025)
+- **Fixed Namespace Handling**: Corrected Pinecone namespace configuration across all handlers
+- **Improved DynamoDB Updates**: Fixed chunk status tracking with proper attribute updates
+- **Enhanced Error Handling**: Better error reporting for chunk processing failures
+- **Optimized OpenAI Client**: Improved rate limiting and batch processing
 
 ## Future Improvements
 - Add formal test suite

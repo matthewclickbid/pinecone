@@ -269,18 +269,16 @@ def create_chunk_result(chunk_id: str, status: str, processed_records: int = 0,
                        failed_records: int = 0, vectors_upserted: int = 0, 
                        actual_records: int = 0, error: str = None, message: str = None) -> Dict[str, Any]:
     """Create standardized chunk processing result."""
+    # Minimal result to avoid Step Functions data size limits
     result = {
         "chunk_id": chunk_id,
         "status": status,
-        "processed_records": processed_records,
-        "failed_records": failed_records,
-        "vectors_upserted": vectors_upserted,
-        "actual_records": actual_records
+        "count": vectors_upserted  # Single count field instead of multiple
     }
     
-    if error:
-        result["error"] = error
-    if message:
-        result["message"] = message
+    # Only add error for failed chunks (keep it short)
+    if error and status == "FAILED":
+        # Truncate error message to avoid data size issues
+        result["error"] = error[:100] if len(error) > 100 else error
         
     return result

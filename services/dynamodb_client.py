@@ -296,25 +296,7 @@ class DynamoDBClient:
                 ':updated_at': current_time
             }
             
-            # Initialize all maps that need to exist
-            map_inits = []
-            if error_message:
-                map_inits.append('chunk_errors = if_not_exists(chunk_errors, :empty_map)')
-            if processed_records is not None:
-                map_inits.append('chunk_processed = if_not_exists(chunk_processed, :empty_map)')
-            if failed_records is not None:
-                map_inits.append('chunk_failed = if_not_exists(chunk_failed, :empty_map)')
-            if vectors_upserted is not None:
-                map_inits.append('chunk_vectors = if_not_exists(chunk_vectors, :empty_map)')
-            
-            # Only add :empty_map if we have any map initializations
-            if map_inits:
-                expression_attribute_values[':empty_map'] = {}
-            
-            # Add map initializations first
-            update_expression_parts.extend(map_inits)
-            
-            # Now add the specific field updates
+            # Now add the specific field updates directly (without map initializations)
             if error_message:
                 update_expression_parts.append('chunk_errors.#chunk_id = :error')
                 expression_attribute_values[':error'] = error_message
