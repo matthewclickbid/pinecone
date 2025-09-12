@@ -1,0 +1,7 @@
+# Test data
+test_data/csv_files/*.csv
+
+# Environment files with secrets
+.env.production
+.env.local
+

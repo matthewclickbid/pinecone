@@ -1,0 +1,65 @@
+# Core Web Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+gunicorn==21.2.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# API Documentation
+python-multipart==0.0.6
+
+# AWS Services
+boto3>=1.26.0
+botocore>=1.29.0
+
+# External APIs
+requests>=2.28.0
+httpx==0.25.2  # For async HTTP requests
+aiohttp==3.9.1  # Alternative async HTTP client
+
+# OpenAI
+openai==0.28.1
+openai[datalib]
+
+# Pinecone
+pinecone>=3.0.0
+
+# Data Processing
+pandas>=2.2.0
+numpy>=1.26.0
+python-dateutil>=2.8.2
+
+# Task Queue and Background Processing
+celery[redis]==5.3.4
+redis==4.6.0  # Compatible with celery[redis] 5.3.4
+flower==2.0.1  # Celery monitoring
+kombu==5.3.4  # Celery transport
+billiard==4.2.0  # Celery multiprocessing
+
+# Environment Management
+python-dotenv==1.0.0
+
+# Logging and Monitoring
+structlog==23.2.0
+colorama==0.4.6
+psutil==5.9.8  # System resource monitoring
+
+# Testing (optional for Phase 1)
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+httpx==0.25.2  # For testing async endpoints
+
+# Development Tools
+black==23.12.1
+flake8==6.1.0
+mypy==1.7.1
+pre-commit==3.6.0
+
+# Performance
+orjson==3.9.10  # Fast JSON serialization
+ujson==5.9.0    # Alternative fast JSON
+
+# Security
+cryptography==41.0.7
+pyjwt==2.8.0  # For future JWT support

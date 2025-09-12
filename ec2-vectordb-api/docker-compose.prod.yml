@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vectordb-api
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=6379
+      - USE_LOCAL_FILES=false
+    env_file:
+      - .env.production
+    volumes:
+      - ./logs:/app/logs
+      - /tmp:/tmp  # For temporary CSV processing
+    depends_on:
+      - redis-check
+    networks:
+      - vectordb-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vectordb-worker
+    environment:
+      - ENVIRONMENT=production
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=6379
+      - USE_LOCAL_FILES=false
+    env_file:
+      - .env.production
+    volumes:
+      - ./logs:/app/logs
+      - /tmp:/tmp  # For temporary CSV processing
+    depends_on:
+      - redis-check
+    networks:
+      - vectordb-network
+    restart: unless-stopped
+    command: celery -A app.celery_config worker --loglevel=info --concurrency=4 --max-tasks-per-child=100
+
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vectordb-flower
+    ports:
+      - "5555:5555"
+    environment:
+      - ENVIRONMENT=production
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=6379
+    env_file:
+      - .env.production
+    depends_on:
+      - redis-check
+    networks:
+      - vectordb-network
+    restart: unless-stopped
+    command: celery -A app.celery_config flower --port=5555 --basic_auth=admin:${FLOWER_PASSWORD:-admin}
+
+  # Redis connectivity check service
+  redis-check:
+    image: redis:7-alpine
+    container_name: redis-check
+    networks:
+      - vectordb-network
+    command: sh -c "redis-cli -h ${REDIS_HOST:-redis} ping || exit 1"
+    restart: "no"
+
+networks:
+  vectordb-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
