@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: vectordb-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - vectordb-network
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vectordb-api
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - USE_LOCAL_FILES=true
+      - LOCAL_CSV_FOLDER=/app/test_data/csv_files
+    env_file:
+      - .env
+    volumes:
+      - ./test_data:/app/test_data
+      - ./logs:/app/logs
+      - ./local_storage:/app/local_storage
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - vectordb-network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vectordb-worker
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - USE_LOCAL_FILES=true
+      - LOCAL_CSV_FOLDER=/app/test_data/csv_files
+      - TASK_TIMEOUT=1800
+    env_file:
+      - .env
+    volumes:
+      - ./test_data:/app/test_data
+      - ./logs:/app/logs
+      - ./local_storage:/app/local_storage
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - vectordb-network
+    command: celery -A app.celery_config worker --loglevel=info --concurrency=4 --time-limit=1800 --soft-time-limit=1740
+
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vectordb-flower
+    ports:
+      - "5555:5555"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - vectordb-network
+    command: celery -A app.celery_config flower --port=5555
+
+networks:
+  vectordb-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local
