@@ -4,4 +4,36 @@ test_data/csv_files/*.csv
 # Environment files with secrets
 .env.production
 .env.local
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+venv/
+venv_test/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Backup files
+*.backup
+*_original.py
+*_backup.py
+
+# Test files (if in root)
+test_*.py
+check_*.py
+verify_*.py
+
+# Development files
+process_full_csv.py
+simple_server.py
+worker.py
 
