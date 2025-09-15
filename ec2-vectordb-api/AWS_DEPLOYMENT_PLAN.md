@@ -113,11 +113,12 @@ DynamoDB Table:
   - Billing: On-demand
   - Point-in-time recovery: Enabled
 
-ElastiCache Redis:
+ElastiCache ValKey:
   - Node Type: cache.t3.micro
-  - Engine: Redis 7.0
+  - Engine: ValKey 8.1 (Redis-compatible, 20-33% cheaper)
   - Multi-AZ: No (for cost savings)
   - Purpose: Celery broker and result backend
+  - Note: ValKey is AWS's Redis fork with full compatibility
 
 CloudWatch:
   - Log Groups:
@@ -161,7 +162,7 @@ Internet → Route 53 → ALB → EC2 Instance(s)
 3. Setup security groups
 4. Create S3 bucket
 5. Create DynamoDB table
-6. Setup ElastiCache Redis
+6. Setup ElastiCache ValKey (Redis-compatible, 20-33% cost savings)
 7. Configure IAM roles and policies
 
 ### Phase 3: Deploy Application
@@ -209,8 +210,8 @@ DYNAMODB_TABLE_NAME=vectordb-tasks-prod
 S3_BUCKET_NAME=your-csv-storage-bucket
 USE_LOCAL_FILES=false
 
-# Redis Configuration (ElastiCache)
-REDIS_HOST=<elasticache-endpoint>
+# Redis Configuration (ElastiCache ValKey - Redis-compatible)
+REDIS_HOST=<elasticache-valkey-endpoint>
 REDIS_PORT=6379
 REDIS_DB=0
 
@@ -408,7 +409,7 @@ fi
 
 3. **Infrastructure Dashboard**
    - EC2 metrics
-   - Redis metrics
+   - ValKey/Redis metrics
    - DynamoDB metrics
    - S3 request metrics
 
@@ -487,7 +488,8 @@ fi
 
 ---
 
-**Document Version**: 1.1
-**Last Updated**: 2025-01-10
+**Document Version**: 1.2
+**Last Updated**: 2025-01-15
 **Author**: Claude AI Assistant
 **Status**: Ready for Review
+**Change**: Updated to use ElastiCache ValKey instead of Redis for 20-33% cost savings
