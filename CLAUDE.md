@@ -48,8 +48,20 @@ vectordb-catchup-v2/
 ├── utils/                  # Utility functions
 │   ├── date_utils.py      # Date handling
 │   └── text_sanitizer.py  # Text preprocessing
+├── tests/                  # Comprehensive test suite
+│   ├── unit/              # Unit tests for services
+│   ├── integration/       # Integration tests for handlers
+│   ├── e2e/              # End-to-end workflow tests
+│   ├── fixtures/         # Test data and mocks
+│   └── conftest.py       # Pytest configuration
+├── .github/workflows/      # CI/CD pipelines
+│   ├── ci-cd.yml         # Main CI/CD workflow
+│   └── test-pr.yml       # PR validation workflow
 ├── template.yaml          # SAM/CloudFormation template
 ├── deploy.sh              # Deployment script
+├── pytest.ini             # Pytest configuration
+├── .coveragerc           # Coverage configuration
+├── requirements-test.txt  # Testing dependencies
 └── parameters-*.json      # Environment configurations
 ```
 
@@ -96,7 +108,28 @@ sam deploy --stack-name vectordb-catchup-dev \
   --capabilities CAPABILITY_IAM
 ```
 
-### Testing & Monitoring
+### Testing Commands
+```bash
+# Run all tests
+pytest
+
+# Run unit tests only
+pytest tests/unit -v
+
+# Run integration tests
+pytest tests/integration -v
+
+# Run with coverage report
+pytest --cov=. --cov-report=html
+
+# Run specific test file
+pytest tests/unit/test_openai_client.py -v
+
+# Run tests in parallel
+pytest -n auto
+```
+
+### Monitoring
 ```bash
 # Check Lambda logs
 aws logs tail /aws/lambda/vectordb-processing-dev --follow
@@ -180,21 +213,44 @@ curl -X GET 'https://API_ID.execute-api.us-east-1.amazonaws.com/dev/process?star
 - Parameter Store for secrets (optional)
 - VPC deployment supported
 
-## Testing Approach
-The project includes comprehensive error handling but currently lacks formal test files. When adding tests:
+## Testing Infrastructure
 
-1. **Unit Tests**: Test individual service clients and utilities
-2. **Integration Tests**: Test Lambda handlers with mocked AWS services
-3. **End-to-End Tests**: Test complete workflows with test data
+### Test Coverage
+The project includes a comprehensive test suite with 80% minimum coverage requirement:
+
+1. **Unit Tests** (`tests/unit/`)
+   - Complete coverage for all service clients (DynamoDB, OpenAI, Pinecone, Metabase, S3)
+   - Tests for utility functions and error handling
+   - Mocked external dependencies
+
+2. **Integration Tests** (`tests/integration/`)
+   - Lambda handler testing with mocked AWS services
+   - API Gateway event simulation
+   - Step Functions workflow testing
+
+3. **End-to-End Tests** (`tests/e2e/`)
+   - Complete workflow validation
+   - Error propagation testing
+   - Performance benchmarking
+
+### CI/CD Pipeline
+- **Automated Testing**: Runs on every push and PR
+- **Security Scanning**: Bandit and Safety checks
+- **Code Quality**: Black formatting, Flake8 linting, MyPy type checking
+- **Deployment Automation**: Separate dev/prod deployments
+- **Coverage Reporting**: Codecov integration with HTML reports
 
 ## Recent Updates (January 2025)
 - **Fixed Namespace Handling**: Corrected Pinecone namespace configuration across all handlers
 - **Improved DynamoDB Updates**: Fixed chunk status tracking with proper attribute updates
 - **Enhanced Error Handling**: Better error reporting for chunk processing failures
 - **Optimized OpenAI Client**: Improved rate limiting and batch processing
+- **Comprehensive Testing Suite**: Added full test coverage with unit, integration, and e2e tests
+- **CI/CD Pipeline**: Implemented GitHub Actions workflows for automated testing and deployment
+- **Test Fixtures**: Created sample data and mock responses for consistent testing
+- **Coverage Requirements**: Enforced 80% minimum code coverage with detailed reporting
 
 ## Future Improvements
-- Add formal test suite
 - Implement retry queue for failed records
 - Add data validation schemas
 - Support for incremental updates

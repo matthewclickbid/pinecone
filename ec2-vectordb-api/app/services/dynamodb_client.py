@@ -399,14 +399,132 @@ else:
             logger.info("Task cleanup not implemented in basic DynamoDB client")
             return 0
         
-        # Stub methods for Step Functions features (not needed for EC2 API)
-        def update_task_with_chunks(self, *args, **kwargs):
-            """Stub method - not needed for EC2 API"""
-            pass
-        
-        def update_chunk_status(self, *args, **kwargs):
-            """Stub method - not needed for EC2 API"""
-            pass
+        # Chunk processing methods for parallel CSV processing
+        def update_task_with_chunks(self, task_id: str, total_chunks: int = None,
+                                   estimated_total_records: int = None,
+                                   chunks_metadata: List[Dict[str, Any]] = None,
+                                   chunks: List[Dict[str, Any]] = None) -> None:
+            """Update task with chunk information for parallel processing."""
+            try:
+                # Handle both old and new parameter formats
+                chunks_list = chunks_metadata if chunks_metadata else chunks
+                if not chunks_list:
+                    logger.error("No chunks provided to update_task_with_chunks")
+                    return
+
+                chunk_data = {}
+                for i, chunk in enumerate(chunks_list):
+                    chunk_id = chunk.get('chunk_id', f'chunk_{i:04d}')
+                    chunk_data[chunk_id] = {
+                        'status': 'PENDING',
+                        'start_row': chunk.get('start_row', 0),
+                        'end_row': chunk.get('end_row', 0),
+                        'processed_records': 0,
+                        'failed_records': 0,
+                        'created_at': datetime.utcnow().isoformat()
+                    }
+
+                update_expr = 'SET chunks = :chunks, chunks_total = :total, #status = :status'
+                expr_values = {
+                    ':chunks': chunk_data,
+                    ':total': total_chunks if total_chunks else len(chunks_list),
+                    ':status': 'processing_chunks'
+                }
+
+                if estimated_total_records:
+                    update_expr += ', total_records = :total_records'
+                    expr_values[':total_records'] = estimated_total_records
+
+                self.table.update_item(
+                    Key={'task_id': task_id},
+                    UpdateExpression=update_expr,
+                    ExpressionAttributeNames={'#status': 'status'},
+                    ExpressionAttributeValues=expr_values
+                )
+                logger.info(f"Updated task {task_id} with {len(chunks_list)} chunks")
+            except Exception as e:
+                logger.error(f"Failed to update task with chunks: {e}")
+                raise
+
+        def update_chunk_status(self, task_id: str, chunk_id: str, status: str,
+                              processed_records: int = None, failed_records: int = None,
+                              vectors_upserted: int = None, error_message: str = None) -> None:
+            """Update the status of a specific chunk and aggregate totals."""
+            try:
+                # First, get the current task to access chunks
+                response = self.table.get_item(Key={'task_id': task_id})
+                if 'Item' not in response:
+                    logger.error(f"Task {task_id} not found")
+                    return
+
+                task = response['Item']
+                chunks = task.get('chunks', {})
+
+                # Update the specific chunk
+                if chunk_id not in chunks:
+                    chunks[chunk_id] = {}
+
+                chunks[chunk_id]['status'] = status
+                chunks[chunk_id]['updated_at'] = datetime.utcnow().isoformat()
+
+                if processed_records is not None:
+                    chunks[chunk_id]['processed_records'] = processed_records
+                if failed_records is not None:
+                    chunks[chunk_id]['failed_records'] = failed_records
+                if vectors_upserted is not None:
+                    chunks[chunk_id]['vectors_upserted'] = vectors_upserted
+                if error_message:
+                    chunks[chunk_id]['error_message'] = error_message
+
+                # Calculate aggregate totals
+                total_processed = sum(c.get('processed_records', 0) for c in chunks.values())
+                total_failed = sum(c.get('failed_records', 0) for c in chunks.values())
+                chunks_completed = sum(1 for c in chunks.values() if c.get('status') == 'COMPLETED')
+                chunks_failed = sum(1 for c in chunks.values() if c.get('status') == 'FAILED')
+                chunks_processing = sum(1 for c in chunks.values() if c.get('status') == 'IN_PROGRESS')
+
+                # Update the task with chunk info and aggregated totals
+                update_expr = '''SET
+                    chunks = :chunks,
+                    processed_records = :processed,
+                    failed_records = :failed,
+                    chunks_completed = :completed,
+                    chunks_failed = :chunk_failed,
+                    chunks_processing = :processing,
+                    updated_at = :updated'''
+
+                expr_values = {
+                    ':chunks': chunks,
+                    ':processed': total_processed,
+                    ':failed': total_failed,
+                    ':completed': chunks_completed,
+                    ':chunk_failed': chunks_failed,
+                    ':processing': chunks_processing,
+                    ':updated': datetime.utcnow().isoformat()
+                }
+
+                # Update overall status based on chunk statuses
+                if chunks_failed > 0 and chunks_completed + chunks_failed == len(chunks):
+                    update_expr += ', #status = :status'
+                    expr_values[':status'] = 'PARTIAL_SUCCESS'
+                elif chunks_completed == len(chunks):
+                    update_expr += ', #status = :status, completed_at = :completed_at'
+                    expr_values[':status'] = 'COMPLETED'
+                    expr_values[':completed_at'] = datetime.utcnow().isoformat()
+
+                self.table.update_item(
+                    Key={'task_id': task_id},
+                    UpdateExpression=update_expr,
+                    ExpressionAttributeNames={'#status': 'status'},
+                    ExpressionAttributeValues=expr_values
+                )
+
+                logger.info(f"Updated chunk {chunk_id} status to {status} for task {task_id}")
+                logger.info(f"Aggregated totals - Processed: {total_processed}, Failed: {total_failed}, Chunks completed: {chunks_completed}/{len(chunks)}")
+
+            except Exception as e:
+                logger.error(f"Failed to update chunk status: {e}")
+                # Don't raise to avoid breaking the processing flow
         
         def acquire_processing_lock(self, *args, **kwargs):
             """Stub method - always return True"""

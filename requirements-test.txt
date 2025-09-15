@@ -1,0 +1,26 @@
+# Testing dependencies
+pytest==7.4.4
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+pytest-asyncio==0.21.1
+pytest-timeout==2.2.0
+pytest-xdist==3.5.0  # For parallel test execution
+
+# Mocking and testing utilities
+moto==4.2.12  # For mocking AWS services
+responses==0.24.1  # For mocking HTTP requests
+faker==22.0.0  # For generating test data
+freezegun==1.4.0  # For mocking datetime
+
+# Code quality
+black==23.12.1
+flake8==7.0.0
+mypy==1.8.0
+pylint==3.0.3
+
+# Coverage reporting
+coverage==7.4.0
+codecov==2.1.13
+
+# Load testing (optional)
+locust==2.20.0

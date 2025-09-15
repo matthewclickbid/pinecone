@@ -1,0 +1,193 @@
+{
+  "metabase_responses": {
+    "success": [
+      {
+        "user_id": "user_001",
+        "datetime": "2025-01-01T10:00:00Z",
+        "content": "This is a sample user interaction from the morning session. The user asked about product features and pricing."
+      },
+      {
+        "user_id": "user_002",
+        "datetime": "2025-01-01T10:30:00Z",
+        "content": "Customer inquiry about shipping times and international delivery options. Requested expedited shipping quote."
+      },
+      {
+        "user_id": "user_003",
+        "datetime": "2025-01-01T11:00:00Z",
+        "content": "Technical support request regarding API integration. User experiencing authentication errors with OAuth2 flow."
+      },
+      {
+        "user_id": "user_001",
+        "datetime": "2025-01-01T14:00:00Z",
+        "content": "Follow-up question about bulk discount pricing for enterprise customers. Interested in annual subscription."
+      },
+      {
+        "user_id": "user_004",
+        "datetime": "2025-01-01T15:30:00Z",
+        "content": "Feedback on new dashboard features. User suggests improvements to data visualization and export functionality."
+      }
+    ],
+    "empty": [],
+    "malformed": [
+      {
+        "user_id": "user_005",
+        "content": "Missing datetime field"
+      },
+      {
+        "datetime": "2025-01-01T16:00:00Z",
+        "content": "Missing user_id field"
+      },
+      {
+        "user_id": "user_006",
+        "datetime": "invalid-date",
+        "content": "Invalid datetime format"
+      }
+    ]
+  },
+  "csv_samples": {
+    "small": "user_id,datetime,content\nuser_001,2025-01-01T10:00:00Z,Sample content 1\nuser_002,2025-01-01T11:00:00Z,Sample content 2\nuser_003,2025-01-01T12:00:00Z,Sample content 3",
+    "large_header": "user_id,datetime,content",
+    "malformed": "user_id,datetime\nuser_001,2025-01-01T10:00:00Z\nuser_002,2025-01-01T11:00:00Z"
+  },
+  "embeddings": {
+    "sample_1536": "[0.1, 0.2, 0.3, ...]",
+    "dimension_info": "OpenAI text-embedding-ada-002 produces 1536-dimensional vectors"
+  },
+  "pinecone_vectors": [
+    {
+      "id": "user_001_2025-01-01T10:00:00Z",
+      "values": "[1536 float values]",
+      "metadata": {
+        "user_id": "user_001",
+        "datetime": "2025-01-01T10:00:00Z",
+        "content": "This is a sample user interaction from the morning session.",
+        "source": "metabase",
+        "question_id": "123"
+      }
+    },
+    {
+      "id": "user_002_2025-01-01T10:30:00Z",
+      "values": "[1536 float values]",
+      "metadata": {
+        "user_id": "user_002",
+        "datetime": "2025-01-01T10:30:00Z",
+        "content": "Customer inquiry about shipping times.",
+        "source": "s3_csv",
+        "s3_key": "data/interactions.csv"
+      }
+    }
+  ],
+  "dynamodb_tasks": {
+    "pending": {
+      "task_id": "550e8400-e29b-41d4-a716-446655440000",
+      "status": "pending",
+      "created_at": "2025-01-01T10:00:00Z",
+      "updated_at": "2025-01-01T10:00:00Z",
+      "parameters": {
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-02",
+        "question_id": "123",
+        "data_source": "metabase"
+      },
+      "total_records": 0,
+      "processed_records": 0,
+      "errors": []
+    },
+    "processing": {
+      "task_id": "550e8400-e29b-41d4-a716-446655440001",
+      "status": "processing",
+      "created_at": "2025-01-01T10:00:00Z",
+      "updated_at": "2025-01-01T10:05:00Z",
+      "parameters": {
+        "data_source": "s3_csv",
+        "s3_key": "data/large-file.csv"
+      },
+      "total_records": 10000,
+      "processed_records": 5000,
+      "errors": [],
+      "total_chunks": 10,
+      "chunks": {
+        "0": {"status": "completed", "processed": 1000, "total": 1000},
+        "1": {"status": "completed", "processed": 1000, "total": 1000},
+        "2": {"status": "completed", "processed": 1000, "total": 1000},
+        "3": {"status": "completed", "processed": 1000, "total": 1000},
+        "4": {"status": "completed", "processed": 1000, "total": 1000},
+        "5": {"status": "processing", "processed": 500, "total": 1000},
+        "6": {"status": "pending", "processed": 0, "total": 0},
+        "7": {"status": "pending", "processed": 0, "total": 0},
+        "8": {"status": "pending", "processed": 0, "total": 0},
+        "9": {"status": "pending", "processed": 0, "total": 0}
+      }
+    },
+    "completed": {
+      "task_id": "550e8400-e29b-41d4-a716-446655440002",
+      "status": "completed",
+      "created_at": "2025-01-01T10:00:00Z",
+      "updated_at": "2025-01-01T10:15:00Z",
+      "parameters": {
+        "start_date": "2025-01-01",
+        "question_id": "123",
+        "data_source": "metabase"
+      },
+      "total_records": 500,
+      "processed_records": 500,
+      "errors": []
+    },
+    "failed": {
+      "task_id": "550e8400-e29b-41d4-a716-446655440003",
+      "status": "failed",
+      "created_at": "2025-01-01T10:00:00Z",
+      "updated_at": "2025-01-01T10:10:00Z",
+      "parameters": {
+        "start_date": "2025-01-01",
+        "question_id": "999",
+        "data_source": "metabase"
+      },
+      "total_records": 0,
+      "processed_records": 0,
+      "errors": [
+        "Metabase API error: Question not found",
+        "Failed to fetch data from Metabase"
+      ]
+    }
+  },
+  "api_responses": {
+    "process_success": {
+      "statusCode": 202,
+      "body": {
+        "task_id": "550e8400-e29b-41d4-a716-446655440000",
+        "status": "processing",
+        "message": "Task initiated successfully"
+      }
+    },
+    "status_success": {
+      "statusCode": 200,
+      "body": {
+        "task_id": "550e8400-e29b-41d4-a716-446655440002",
+        "status": "completed",
+        "total_records": 500,
+        "processed_records": 500,
+        "created_at": "2025-01-01T10:00:00Z",
+        "updated_at": "2025-01-01T10:15:00Z"
+      }
+    },
+    "unauthorized": {
+      "statusCode": 401,
+      "body": {
+        "error": "Unauthorized"
+      }
+    },
+    "bad_request": {
+      "statusCode": 400,
+      "body": {
+        "error": "Missing required parameter: start_date"
+      }
+    },
+    "not_found": {
+      "statusCode": 404,
+      "body": {
+        "error": "Task not found"
+      }
+    }
+  }
+}
