@@ -427,5 +427,59 @@ class ProgressTracker:
                 pass
 
 
+    
+    def update_chunk_status(self, chunk_id: str, status: str,
+                           processed_records: int = 0, failed_records: int = 0,
+                           vectors_upserted: int = 0, error_message: str = None) -> None:
+        """
+        Update the status of a specific chunk being processed.
+        This method bridges calls from chunk_processor to DynamoDB.
+        
+        Args:
+            chunk_id: Chunk identifier
+            status: Chunk status (IN_PROGRESS, COMPLETED, FAILED)
+            processed_records: Number of records processed
+            failed_records: Number of failed records
+            vectors_upserted: Number of vectors upserted to Pinecone
+            error_message: Error message if failed
+        """
+        try:
+            # Extract task_id from the progress tracker's context
+            # The task_id should be stored when the tracker is initialized
+            if hasattr(self, 'task_id'):
+                task_id = self.task_id
+            else:
+                # Try to extract from chunk_id pattern if it includes task_id
+                # Otherwise, we need to get it from somewhere
+                logger.warning(f"Task ID not set in progress tracker for chunk {chunk_id}")
+                return
+            
+            # Call DynamoDB update_chunk_status directly
+            self.dynamodb.update_chunk_status(
+                task_id=task_id,
+                chunk_id=chunk_id,
+                status=status,
+                processed_records=processed_records,
+                failed_records=failed_records,
+                vectors_upserted=vectors_upserted,
+                error_message=error_message
+            )
+            
+            logger.debug(f"Updated chunk status for {chunk_id}: {status}")
+            
+        except Exception as e:
+            logger.error(f"Error updating chunk status for {chunk_id}: {e}")
+            # Don't raise - chunk status updates shouldn't break the main task
+
+    def set_task_id(self, task_id: str) -> None:
+        """
+        Set the task ID for this progress tracker instance.
+        This is needed to properly update chunk status.
+        
+        Args:
+            task_id: The task identifier
+        """
+        self.task_id = task_id
+
 # Global progress tracker instance
 progress_tracker = ProgressTracker()

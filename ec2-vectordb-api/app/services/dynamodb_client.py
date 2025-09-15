@@ -27,7 +27,7 @@ else:
     class DynamoDBClient:
         def __init__(self):
             self.table_name = os.environ.get('DYNAMODB_TABLE_NAME', 'vectordb-tasks')
-            self.dynamodb = boto3.resource('dynamodb')
+            self.dynamodb = boto3.resource('dynamodb', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
             self.table = self.dynamodb.Table(self.table_name)
             
             logger.info(f"Initialized DynamoDB client for table: {self.table_name}")
@@ -365,18 +365,8 @@ else:
         
         def cancel_task(self, task_id: str, reason: str = None) -> None:
             """Cancel a task and update its status."""
-            current_time = datetime.utcnow().isoformat()
-            
-            update_data = {
-                'status': 'CANCELLED',
-                'updated_at': current_time,
-                'completed_at': current_time
-            }
-            
-            if reason:
-                update_data['cancellation_reason'] = reason
-            
-            self.update_task_status(task_id, 'CANCELLED', **update_data)
+            metadata = {'cancellation_reason': reason} if reason else {}
+            self.update_task_status(task_id, status='CANCELLED', metadata=metadata)
             logger.info(f"Task {task_id} cancelled. Reason: {reason or 'No reason provided'}")
         
         def get_task_statistics(self, time_period_hours: int = 24) -> Dict[str, Any]:
@@ -435,12 +425,18 @@ else:
                     update_expr += ', total_records = :total_records'
                     expr_values[':total_records'] = estimated_total_records
 
-                self.table.update_item(
-                    Key={'task_id': task_id},
-                    UpdateExpression=update_expr,
-                    ExpressionAttributeNames={'#status': 'status'},
-                    ExpressionAttributeValues=expr_values
-                )
+                # Build update params
+                update_params = {
+                    'Key': {'task_id': task_id},
+                    'UpdateExpression': update_expr,
+                    'ExpressionAttributeValues': expr_values
+                }
+                
+                # Only add ExpressionAttributeNames if needed
+                if '#status' in update_expr:
+                    update_params['ExpressionAttributeNames'] = {'#status': 'status'}
+                
+                self.table.update_item(**update_params)
                 logger.info(f"Updated task {task_id} with {len(chunks_list)} chunks")
             except Exception as e:
                 logger.error(f"Failed to update task with chunks: {e}")
@@ -512,12 +508,18 @@ else:
                     expr_values[':status'] = 'COMPLETED'
                     expr_values[':completed_at'] = datetime.utcnow().isoformat()
 
-                self.table.update_item(
-                    Key={'task_id': task_id},
-                    UpdateExpression=update_expr,
-                    ExpressionAttributeNames={'#status': 'status'},
-                    ExpressionAttributeValues=expr_values
-                )
+                # Build update params
+                update_params = {
+                    'Key': {'task_id': task_id},
+                    'UpdateExpression': update_expr,
+                    'ExpressionAttributeValues': expr_values
+                }
+                
+                # Only add ExpressionAttributeNames if needed
+                if '#status' in update_expr:
+                    update_params['ExpressionAttributeNames'] = {'#status': 'status'}
+                
+                self.table.update_item(**update_params)
 
                 logger.info(f"Updated chunk {chunk_id} status to {status} for task {task_id}")
                 logger.info(f"Aggregated totals - Processed: {total_processed}, Failed: {total_failed}, Chunks completed: {chunks_completed}/{len(chunks)}")

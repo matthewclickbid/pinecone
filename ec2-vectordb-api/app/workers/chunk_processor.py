@@ -17,7 +17,7 @@ from app.utils.multiprocessing_handler import (
     MultiprocessingCSVProcessor,
     process_csv_with_multiprocessing
 )
-# from app.utils.progress_tracker import ProgressTracker  # Disabled for local testing
+from app.utils.progress_tracker import ProgressTracker
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +68,10 @@ class EnhancedChunkProcessor:
             openai_rate_limit=settings.OPENAI_RATE_LIMIT,
             pinecone_batch_size=self.batch_size
         )
-        # self.progress_tracker = ProgressTracker()  # Disabled for local testing
-        self.progress_tracker = None
+        self.progress_tracker = ProgressTracker()
+        if self.progress_tracker:
+            self.progress_tracker.set_task_id(self.task_id)
+        # self.progress_tracker = None  # Removed - using real tracker
         
         # Processing state
         self.start_time = None
