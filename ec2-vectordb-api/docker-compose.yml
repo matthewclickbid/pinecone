@@ -27,8 +27,6 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - USE_LOCAL_FILES=true
-      - LOCAL_CSV_FOLDER=/app/test_data/csv_files
     env_file:
       - .env
     volumes:
@@ -50,8 +48,6 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - USE_LOCAL_FILES=true
-      - LOCAL_CSV_FOLDER=/app/test_data/csv_files
       - TASK_TIMEOUT=1800
     env_file:
       - .env
