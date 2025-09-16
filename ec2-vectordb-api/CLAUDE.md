@@ -165,54 +165,100 @@ Response:
 
 ## Deployment
 
-### EC2 Instance Setup
+### SSH Connection Information
 ```bash
-# Recommended Instance Types
-- Development: t3.large (2 vCPUs, 8GB RAM)
-- Production: m5.xlarge (4 vCPUs, 16GB RAM)
-- High Volume: m5.2xlarge (8 vCPUs, 32GB RAM)
+# 1. Connect to Bastion Host
+ssh -i ~/.ssh/cbdevelopment.pem ec2-user@54.198.220.178
 
-# Storage
-- Root: 30GB GP3
-- Data: 100GB+ GP3 (for temporary file storage)
+# 2. Once on Bastion, Connect to EC2 Instance
+ssh -i aws-cbodev.pem ec2-user@172.18.0.218
+
+# Note: The aws-cbodev.pem file is located in the home directory on the bastion host
 ```
 
-### Quick Start
-```bash
-# 1. Clone repository
-git clone <repo-url>
-cd ec2-vectordb-api
+### EC2 Instance Details
+- **Bastion Host**: 54.198.220.178 (public IP)
+- **EC2 Instance**: 172.18.0.218 (private IP, accessible only via bastion)
+- **SSH Keys**:
+  - Local to Bastion: `~/.ssh/cbdevelopment.pem`
+  - Bastion to EC2: `~/aws-cbodev.pem` (on bastion)
+- **User**: ec2-user for both connections
 
-# 2. Install dependencies
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+### Docker Container Setup
 
-# 3. Configure environment
-cp .env.example .env
-# Edit .env with your credentials
+The application runs in Docker containers managed by docker-compose:
 
-# 4. Run application
-# Development
-uvicorn app.main:app --reload
-
-# Production
-gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker
+#### Directory Structure on EC2
+```
+/home/ec2-user/vectordb-api/
+├── ec2-vectordb-api/           # Main application directory
+│   ├── docker-compose.yml      # Docker compose configuration
+│   ├── app/                    # FastAPI application
+│   ├── test_data/             # Local test data
+│   └── ...
+└── ...                        # Lambda-related files (legacy)
 ```
 
-### Systemd Service Setup
+#### Running Containers
 ```bash
-# Copy service files
-sudo cp infrastructure/systemd/*.service /etc/systemd/system/
-sudo systemctl daemon-reload
+# Navigate to the project directory
+cd /home/ec2-user/vectordb-api/ec2-vectordb-api
 
-# Start services
-sudo systemctl start vectordb-api
-sudo systemctl start vectordb-worker
+# View all containers
+docker-compose ps
 
-# Enable on boot
-sudo systemctl enable vectordb-api
-sudo systemctl enable vectordb-worker
+# Check logs
+docker-compose logs --tail 100 app     # API logs
+docker-compose logs --tail 100 worker  # Worker logs
+docker-compose logs --tail 100 redis   # Redis logs
+docker-compose logs --tail 100 flower  # Flower monitoring logs
+
+# Restart services
+docker-compose restart app
+docker-compose restart worker
+
+# Stop all services
+docker-compose down
+
+# Start all services
+docker-compose up -d
+
+# Rebuild and restart (after code changes)
+docker-compose down
+docker-compose build
+docker-compose up -d
+```
+
+#### Container Services
+1. **vectordb-api** (app): FastAPI application on port 8000
+2. **vectordb-worker** (worker): Celery background worker for processing tasks
+3. **vectordb-redis** (redis): Redis broker for task queue on port 6379
+4. **vectordb-flower** (flower): Celery monitoring dashboard on port 5555
+
+#### Health Check from EC2
+```bash
+# Check API health
+curl http://localhost:8000/health
+
+# Check with formatting
+curl -s http://localhost:8000/health | python3 -m json.tool
+```
+
+### Deployment Commands via SSH
+```bash
+# One-line command from local machine to check status
+ssh -i ~/.ssh/cbdevelopment.pem ec2-user@54.198.220.178 \
+  "ssh -i aws-cbodev.pem ec2-user@172.18.0.218 \
+  'cd /home/ec2-user/vectordb-api/ec2-vectordb-api && docker-compose ps'"
+
+# Deploy new code changes
+ssh -i ~/.ssh/cbdevelopment.pem ec2-user@54.198.220.178 \
+  "ssh -i aws-cbodev.pem ec2-user@172.18.0.218 \
+  'cd /home/ec2-user/vectordb-api/ec2-vectordb-api && \
+  git pull && \
+  docker-compose down && \
+  docker-compose build && \
+  docker-compose up -d'"
 ```
 
 ## Monitoring

@@ -89,33 +89,56 @@ class S3CSVStreamer(CSVStreamer):
     def count_rows(self, s3_key: str) -> int:
         """
         Count rows in S3 CSV file.
-        
+
         Args:
             s3_key: S3 object key
-            
+
         Returns:
             Total number of rows (excluding header)
         """
         try:
             logger.info(f"Counting rows in s3://{self.bucket_name}/{s3_key}")
-            
+
             # Get object size first to estimate
             response = self.s3_client.head_object(Bucket=self.bucket_name, Key=s3_key)
             file_size = response['ContentLength']
-            
+
             # For very large files, use sampling to estimate
             if file_size > 100 * 1024 * 1024:  # 100MB
                 return self._estimate_rows(s3_key, file_size)
-            
-            # For smaller files, count exactly
-            row_count = 0
-            for chunk in self._stream_s3_lines(s3_key):
-                lines = chunk.count('\n')
-                row_count += lines
-            
-            # Subtract 1 for header
-            return max(0, row_count - 1)
-            
+
+            # For smaller files, count exactly using CSV reader to handle multi-line fields
+            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
+
+            # Handle compressed files
+            if s3_key.endswith('.gz'):
+                body = gzip.GzipFile(fileobj=response['Body'])
+                lines = io.TextIOWrapper(body, encoding='utf-8', errors='ignore')
+            elif s3_key.endswith('.zip'):
+                # Handle zip files
+                with tempfile.TemporaryFile() as temp_file:
+                    temp_file.write(response['Body'].read())
+                    temp_file.seek(0)
+                    with zipfile.ZipFile(temp_file) as zf:
+                        csv_files = [f for f in zf.namelist() if f.endswith('.csv')]
+                        if csv_files:
+                            lines = io.TextIOWrapper(
+                                zf.open(csv_files[0]),
+                                encoding='utf-8',
+                                errors='ignore'
+                            )
+                        else:
+                            logger.error("No CSV files found in zip archive")
+                            return 0
+            else:
+                lines = io.TextIOWrapper(response['Body'], encoding='utf-8', errors='ignore')
+
+            # Use CSV reader to properly count records (handles multi-line fields)
+            csv_reader = csv.reader(lines)
+            row_count = sum(1 for _ in csv_reader) - 1  # Subtract header
+
+            return max(0, row_count)
+
         except ClientError as e:
             logger.error(f"Error counting rows in S3 file: {e}")
             raise
@@ -123,32 +146,56 @@ class S3CSVStreamer(CSVStreamer):
     def _estimate_rows(self, s3_key: str, file_size: int) -> int:
         """
         Estimate row count for very large files.
-        
+
         Args:
             s3_key: S3 object key
             file_size: Total file size in bytes
-            
+
         Returns:
             Estimated row count
         """
-        # Read first 1MB to estimate average row size
-        sample_size = min(1024 * 1024, file_size)
-        
+        # Read first 5MB to get a better estimate with CSV reader
+        sample_size = min(5 * 1024 * 1024, file_size)
+
         response = self.s3_client.get_object(
             Bucket=self.bucket_name,
             Key=s3_key,
             Range=f'bytes=0-{sample_size-1}'
         )
-        
-        sample_data = response['Body'].read().decode('utf-8', errors='ignore')
-        sample_lines = sample_data.count('\n')
-        
-        if sample_lines > 0:
-            avg_line_size = sample_size / sample_lines
-            estimated_rows = int(file_size / avg_line_size)
-            logger.info(f"Estimated {estimated_rows} rows based on sample")
+
+        sample_data = response['Body'].read()
+
+        # Handle compressed files for sampling
+        if s3_key.endswith('.gz'):
+            # For gzip, we need to read from the beginning
+            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
+            body = gzip.GzipFile(fileobj=response['Body'])
+            sample_data = body.read(sample_size)
+
+        # Parse sample with CSV reader to count actual records
+        sample_text = sample_data.decode('utf-8', errors='ignore')
+        sample_lines = io.StringIO(sample_text)
+        csv_reader = csv.reader(sample_lines)
+
+        sample_row_count = 0
+        sample_byte_count = 0
+
+        for row in csv_reader:
+            sample_row_count += 1
+            # Estimate byte size of row
+            row_str = ','.join(str(field) for field in row)
+            sample_byte_count += len(row_str.encode('utf-8')) + 1  # +1 for newline
+
+            # Stop if we've processed enough sample
+            if sample_byte_count >= sample_size * 0.9:  # 90% of sample
+                break
+
+        if sample_row_count > 1:  # More than just header
+            avg_row_size = sample_byte_count / sample_row_count
+            estimated_rows = int(file_size / avg_row_size)
+            logger.info(f"Estimated {estimated_rows} rows based on sample of {sample_row_count} rows")
             return estimated_rows - 1  # Subtract header
-        
+
         return 0
     
     def _stream_s3_lines(self, s3_key: str, chunk_bytes: int = 1024 * 1024) -> Iterator[str]:
