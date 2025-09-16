@@ -501,9 +501,25 @@ async def list_tasks(
                 except:
                     pass
             
+            # Map DynamoDB status values to API status values
+            status_mapping = {
+                'PENDING': 'pending',
+                'QUEUED': 'queued',
+                'IN_PROGRESS': 'processing',
+                'PROCESSING': 'processing',
+                'PROCESSING_CHUNKS': 'processing_chunks',
+                'PARTIAL_SUCCESS': 'partially_completed',
+                'COMPLETED': 'completed',
+                'FAILED': 'failed',
+                'CANCELLED': 'cancelled'
+            }
+
+            task_status = task.get("status", "PENDING").upper()
+            mapped_status = status_mapping.get(task_status, task_status.lower())
+
             response.append(TaskStatus(
                 task_id=task["task_id"],
-                status=task["status"].lower(),
+                status=mapped_status,
                 progress=progress,
                 started_at=started_at,
                 completed_at=completed_at,
