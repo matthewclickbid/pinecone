@@ -448,6 +448,11 @@ async def list_tasks(
         # Convert to response model
         response = []
         for task in paginated_tasks:
+            # Debug logging
+            logger.debug(f"Task {task.get('task_id')}: total_records={task.get('total_records')}, "
+                        f"chunks_total={task.get('chunks_total')}, chunks_completed={task.get('chunks_completed')}, "
+                        f"processed_records={task.get('processed_records')}")
+
             # Get progress data
             progress_data = progress_tracker.get_progress(task['task_id'])
 
@@ -460,17 +465,22 @@ async def list_tasks(
                 total_records = progress_data.get('total', 0) or task.get('total_records', 0)
                 processed_records = progress_data.get('current', 0) or task.get('processed_records', 0)
             else:
-                total_records = task.get('total_records', 0)
-                processed_records = task.get('processed_records', 0)
+                # Use the actual values from DynamoDB, handling None properly
+                total_records = task.get('total_records') or 0
+                processed_records = task.get('processed_records') or 0
+
+            # Get chunk values, ensuring we handle None values
+            chunks_total = task.get('chunks_total') or task.get('total_chunks') or 0
+            chunks_completed = task.get('chunks_completed') or task.get('completed_chunks') or 0
 
             progress = TaskProgress(
                 total_records=total_records,
                 processed_records=processed_records,
-                failed_records=task.get('failed_records', 0),
-                chunks_total=task.get('chunks_total', task.get('total_chunks', 0)),
-                chunks_completed=task.get('chunks_completed', task.get('completed_chunks', 0)),
-                chunks_processing=task.get('chunks_processing', 0),
-                chunks_failed=task.get('chunks_failed', 0),
+                failed_records=task.get('failed_records') or 0,
+                chunks_total=chunks_total,
+                chunks_completed=chunks_completed,
+                chunks_processing=task.get('chunks_processing') or 0,
+                chunks_failed=task.get('chunks_failed') or 0,
                 current_chunk=task.get('current_chunk'),
                 percentage=progress_data.get('progress_percentage', 0.0) if progress_data else task.get('progress_percentage', 0.0)
             )
