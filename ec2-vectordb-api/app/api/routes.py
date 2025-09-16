@@ -437,8 +437,8 @@ async def list_tasks(
         if status_filter:
             tasks = dynamodb.get_tasks_by_status(status_filter.upper(), task_type, limit)
         else:
-            # Get active tasks by default (can be extended to get all)
-            tasks = dynamodb.get_active_tasks(limit)
+            # Get all tasks when no status filter provided
+            tasks = dynamodb.get_all_tasks(limit)
             if task_type:
                 tasks = [t for t in tasks if t.get('task_type') == task_type]
         
@@ -450,12 +450,28 @@ async def list_tasks(
         for task in paginated_tasks:
             # Get progress data
             progress_data = progress_tracker.get_progress(task['task_id'])
-            
+
             # Create progress object - prioritize progress_data, fall back to task data
+            # Handle both naming conventions for consistency with status endpoint
+            total_records = 0
+            processed_records = 0
+
+            if progress_data:
+                total_records = progress_data.get('total', 0) or task.get('total_records', 0)
+                processed_records = progress_data.get('current', 0) or task.get('processed_records', 0)
+            else:
+                total_records = task.get('total_records', 0)
+                processed_records = task.get('processed_records', 0)
+
             progress = TaskProgress(
-                total_records=progress_data.get('total', 0) if progress_data else task.get('total_records', 0),
-                processed_records=progress_data.get('current', 0) if progress_data else task.get('processed_records', 0),
+                total_records=total_records,
+                processed_records=processed_records,
                 failed_records=task.get('failed_records', 0),
+                chunks_total=task.get('chunks_total', task.get('total_chunks', 0)),
+                chunks_completed=task.get('chunks_completed', task.get('completed_chunks', 0)),
+                chunks_processing=task.get('chunks_processing', 0),
+                chunks_failed=task.get('chunks_failed', 0),
+                current_chunk=task.get('current_chunk'),
                 percentage=progress_data.get('progress_percentage', 0.0) if progress_data else task.get('progress_percentage', 0.0)
             )
             

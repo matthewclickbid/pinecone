@@ -314,10 +314,10 @@ else:
         def get_active_tasks(self, limit: int = 100) -> List[Dict[str, Any]]:
             """
             Get all active (non-completed) tasks.
-            
+
             Args:
                 limit: Maximum number of tasks to return
-                
+
             Returns:
                 List of active task records
             """
@@ -334,12 +334,35 @@ else:
                     },
                     Limit=limit
                 )
-                
+
                 tasks = response.get('Items', [])
                 return [self._convert_decimal(task) for task in tasks]
-                
+
             except ClientError as e:
                 logger.error(f"Error getting active tasks: {e}")
+                raise
+
+        def get_all_tasks(self, limit: int = 100) -> List[Dict[str, Any]]:
+            """
+            Get all tasks regardless of status.
+
+            Args:
+                limit: Maximum number of tasks to return
+
+            Returns:
+                List of all task records
+            """
+            try:
+                response = self.table.scan(Limit=limit)
+                tasks = response.get('Items', [])
+
+                # Sort by created_at in descending order (newest first)
+                tasks.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+
+                return [self._convert_decimal(task) for task in tasks]
+
+            except ClientError as e:
+                logger.error(f"Error getting all tasks: {e}")
                 raise
         
         # Add stub methods for compatibility
