@@ -353,8 +353,26 @@ else:
                 List of all task records
             """
             try:
-                response = self.table.scan(Limit=limit)
-                tasks = response.get('Items', [])
+                tasks = []
+                last_evaluated_key = None
+
+                # Paginate through results until we have enough or no more data
+                while len(tasks) < limit:
+                    scan_params = {}
+                    if last_evaluated_key:
+                        scan_params['ExclusiveStartKey'] = last_evaluated_key
+
+                    response = self.table.scan(**scan_params)
+                    items = response.get('Items', [])
+                    tasks.extend(items)
+
+                    # Check if there are more items to scan
+                    last_evaluated_key = response.get('LastEvaluatedKey')
+                    if not last_evaluated_key:
+                        break
+
+                # Truncate to limit if we got more
+                tasks = tasks[:limit]
 
                 # Sort by created_at in descending order (newest first)
                 tasks.sort(key=lambda x: x.get('created_at', ''), reverse=True)
