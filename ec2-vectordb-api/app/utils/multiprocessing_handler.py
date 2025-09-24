@@ -273,18 +273,35 @@ class MultiprocessingCSVProcessor:
         try:
             for i, record in enumerate(chunk_data):
                 try:
-                    # Sanitize text
-                    text_content = sanitize_text(record)
+                    # Get text content based on record type
+                    if isinstance(record, dict):
+                        # For CSV records, use formatted_text field
+                        text_content = record.get('formatted_text', '')
+                        if not text_content:
+                            # Fallback to sanitizing the entire record as text
+                            text_content = sanitize_text(str(record))
+                        else:
+                            text_content = sanitize_text(text_content)
+
+                        # Get row ID for vector ID
+                        row_id = record.get('id', '')
+                        if not row_id:
+                            raise ValueError(f"CSV record missing 'id' field required for vector ID construction at index {i}")
+                    else:
+                        # For non-dict records, sanitize as string
+                        text_content = sanitize_text(str(record))
+                        raise ValueError(f"Record at index {i} is not a dictionary, cannot extract 'id' field")
+
                     if not text_content.strip():
                         result['failed'] += 1
                         continue
-                    
+
                     # Rate limit for OpenAI API
                     if not rate_limiter.acquire(timeout=30):
                         logger.warning(f"Rate limit timeout for chunk {chunk_id}, record {i}")
                         result['failed'] += 1
                         continue
-                    
+
                     # Generate embedding
                     try:
                         embedding = openai_client.get_embedding(text_content)
@@ -292,14 +309,6 @@ class MultiprocessingCSVProcessor:
                         logger.warning(f"Failed to generate embedding for chunk {chunk_id}, record {i}: {e}")
                         result['failed'] += 1
                         continue
-                    
-                    # Get row ID from record
-                    if isinstance(record, dict):
-                        row_id = record.get('id', '')
-                        if not row_id:
-                            raise ValueError(f"CSV record missing 'id' field required for vector ID construction at index {i}")
-                    else:
-                        raise ValueError(f"Record at index {i} is not a dictionary, cannot extract 'id' field")
 
                     # Validate question_id
                     if not question_id:
@@ -307,18 +316,32 @@ class MultiprocessingCSVProcessor:
 
                     # Prepare vector with proper ID format
                     vector_id = f"{question_id}.{row_id}"
+
+                    # Prepare metadata with ALL CSV fields
+                    metadata = {
+                        'text': text_content[:1000],
+                        'chunk_id': chunk_id,
+                        'record_index': i,
+                        'task_id': task_id,
+                        'question_id': question_id,
+                        'row_id': row_id,
+                        'source': 'csv_multiprocessing'
+                    }
+
+                    # Add all additional metadata from record if it's a dict
+                    if isinstance(record, dict):
+                        # Add ALL fields from CSV (except formatted_text which becomes 'text')
+                        for field, value in record.items():
+                            # Skip formatted_text as it's already stored as 'text'
+                            # Skip fields that are already in metadata
+                            if field != 'formatted_text' and field not in metadata and value:
+                                # Convert value to string to ensure compatibility
+                                metadata[field] = str(value)
+
                     vector_data = {
                         'id': vector_id,
                         'values': embedding,
-                        'metadata': {
-                            'text': text_content[:1000],
-                            'chunk_id': chunk_id,
-                            'record_index': i,
-                            'task_id': task_id,
-                            'question_id': question_id,
-                            'row_id': row_id,
-                            'source': 'csv_multiprocessing'
-                        }
+                        'metadata': metadata
                     }
                     vectors_to_upsert.append(vector_data)
                     
