@@ -111,15 +111,17 @@ class MultiprocessingCSVProcessor:
         chunks: List[List[Dict[str, Any]]],
         task_id: str,
         namespace: str,
+        question_id: str,
         progress_callback: Optional[callable] = None
     ) -> Dict[str, Any]:
         """
         Process multiple CSV chunks in parallel.
-        
+
         Args:
             chunks: List of chunk data (each chunk is a list of records)
             task_id: Task ID for tracking
             namespace: Pinecone namespace
+            question_id: Question ID for vector ID construction
             progress_callback: Optional callback for progress updates
             
         Returns:
@@ -165,6 +167,7 @@ class MultiprocessingCSVProcessor:
                         chunk_id,
                         task_id,
                         namespace,
+                        question_id,
                         rate_limiter,
                         progress_queue,
                         error_queue
@@ -228,18 +231,20 @@ class MultiprocessingCSVProcessor:
         chunk_id: str,
         task_id: str,
         namespace: str,
+        question_id: str,
         rate_limiter: RateLimiter,
         progress_queue: Queue,
         error_queue: Queue
     ) -> Dict[str, Any]:
         """
         Process a single chunk in a worker process.
-        
+
         Args:
             chunk_data: List of records in the chunk
             chunk_id: Unique chunk identifier
             task_id: Task ID for tracking
             namespace: Pinecone namespace
+            question_id: Question ID for vector ID construction
             rate_limiter: Shared rate limiter
             progress_queue: Queue for progress updates
             error_queue: Queue for error reporting
@@ -288,8 +293,20 @@ class MultiprocessingCSVProcessor:
                         result['failed'] += 1
                         continue
                     
-                    # Prepare vector
-                    vector_id = f"{task_id}_{chunk_id}_{i}"
+                    # Get row ID from record
+                    if isinstance(record, dict):
+                        row_id = record.get('id', '')
+                        if not row_id:
+                            raise ValueError(f"CSV record missing 'id' field required for vector ID construction at index {i}")
+                    else:
+                        raise ValueError(f"Record at index {i} is not a dictionary, cannot extract 'id' field")
+
+                    # Validate question_id
+                    if not question_id:
+                        raise ValueError(f"question_id is required for vector ID construction but was not provided")
+
+                    # Prepare vector with proper ID format
+                    vector_id = f"{question_id}.{row_id}"
                     vector_data = {
                         'id': vector_id,
                         'values': embedding,
@@ -298,6 +315,8 @@ class MultiprocessingCSVProcessor:
                             'chunk_id': chunk_id,
                             'record_index': i,
                             'task_id': task_id,
+                            'question_id': question_id,
+                            'row_id': row_id,
                             'source': 'csv_multiprocessing'
                         }
                     }
@@ -419,17 +438,19 @@ def process_csv_with_multiprocessing(
     csv_data: List[Dict[str, Any]],
     task_id: str,
     namespace: str,
+    question_id: str,
     chunk_size: Optional[int] = None,
     max_workers: Optional[int] = None,
     progress_callback: Optional[callable] = None
 ) -> Dict[str, Any]:
     """
     High-level function to process CSV data using multiprocessing.
-    
+
     Args:
         csv_data: Complete CSV data as list of records
         task_id: Task ID for tracking
         namespace: Pinecone namespace
+        question_id: Question ID for vector ID construction
         chunk_size: Size of chunks (optional, will be optimized if not provided)
         max_workers: Maximum worker processes (optional)
         progress_callback: Callback for progress updates
@@ -456,6 +477,7 @@ def process_csv_with_multiprocessing(
         chunks=chunks,
         task_id=task_id,
         namespace=namespace,
+        question_id=question_id,
         progress_callback=progress_callback
     )
     

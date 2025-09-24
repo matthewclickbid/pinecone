@@ -403,6 +403,7 @@ class EnhancedChunkProcessor:
                 csv_data=all_data,
                 task_id=self.task_id,
                 namespace=self.namespace,
+                question_id=self.question_id,
                 chunk_size=self.chunk_size,
                 max_workers=self.max_workers,
                 progress_callback=progress_callback
@@ -527,11 +528,13 @@ class EnhancedChunkProcessor:
                     continue
                 
                 # Create vector ID in format: question_id.row_id
-                if self.question_id:
-                    vector_id = f"{self.question_id}.{row_id}"
-                else:
-                    # Fallback if no question_id provided
-                    vector_id = f"{self.task_id}_{chunk_id}_{i}"
+                if not self.question_id:
+                    raise ValueError(f"question_id is required for vector ID construction but was not provided")
+
+                if not row_id or row_id.startswith("unknown_"):
+                    raise ValueError(f"Valid row ID required from CSV 'id' column. Got: {row_id}")
+
+                vector_id = f"{self.question_id}.{row_id}"
                 
                 # Prepare metadata
                 metadata = {

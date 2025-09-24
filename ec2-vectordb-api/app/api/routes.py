@@ -70,6 +70,12 @@ async def process_data(request: ProcessRequest):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="s3_key is required for S3 CSV data processing"
             )
+
+        if request.data_source == "s3_csv" and not request.question_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="question_id is required for CSV processing to construct proper vector IDs (format: question_id.row_id)"
+            )
         
         # Create task parameters
         task_parameters = {

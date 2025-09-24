@@ -531,50 +531,66 @@ def get_csv_streamer(use_local: bool = None) -> CSVStreamer:
         )
 
 
-def analyze_csv_structure(file_path: str, use_local: bool = None) -> Dict[str, Any]:
+def analyze_csv_structure(file_path: str, use_local: bool = None, require_id_column: bool = True) -> Dict[str, Any]:
     """
     Analyze CSV file structure and statistics.
-    
+
     Args:
         file_path: Path to CSV file (S3 key or local path)
         use_local: Whether to use local filesystem
-        
+        require_id_column: Whether to require an 'id' column for vector ID construction
+
     Returns:
         Dict with CSV analysis results
+
+    Raises:
+        ValueError: If require_id_column is True and CSV lacks 'id' column
     """
     streamer = get_csv_streamer(use_local)
-    
+
     # Get total rows
     total_rows = streamer.count_rows(file_path)
-    
+
     # Get sample for analysis
     sample = streamer.get_sample(file_path, sample_size=100)
-    
+
     if not sample:
         return {
             'total_rows': 0,
             'columns': [],
-            'estimated_size_mb': 0
+            'estimated_size_mb': 0,
+            'has_id_column': False
         }
-    
+
     # Analyze columns
     columns = list(sample[0].keys()) if sample else []
-    
+
+    # Check for 'id' column
+    has_id_column = 'id' in columns or 'ID' in columns or 'Id' in columns
+
+    if require_id_column and not has_id_column:
+        raise ValueError(
+            f"CSV file must contain an 'id' column for proper vector ID construction. "
+            f"Found columns: {columns}. "
+            f"Vector IDs require format 'question_id.row_id' where row_id comes from the CSV 'id' column."
+        )
+
     # Estimate average row size
     avg_row_size = 0
     for row in sample[:10]:
         row_str = ','.join(str(v) for v in row.values())
         avg_row_size += len(row_str.encode('utf-8'))
     avg_row_size = avg_row_size / min(10, len(sample)) if sample else 0
-    
+
     # Estimate total size
     estimated_size_bytes = avg_row_size * total_rows
     estimated_size_mb = estimated_size_bytes / (1024 * 1024)
-    
+
     return {
         'total_rows': total_rows,
         'columns': columns,
         'column_count': len(columns),
+        'has_id_column': has_id_column,
         'estimated_size_mb': round(estimated_size_mb, 2),
         'avg_row_size_bytes': int(avg_row_size),
         'sample_data': sample[:5]  # Return first 5 rows as sample

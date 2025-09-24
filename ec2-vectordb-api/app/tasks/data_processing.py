@@ -269,7 +269,21 @@ def process_s3_csv_data(
     Returns:
         Dict with processing results
     """
-    
+
+    # Validate required parameters for CSV processing
+    if not question_id:
+        error_msg = "question_id is required for CSV processing to construct proper vector IDs (format: question_id.row_id)"
+        logger.error(f"Task {task_id} failed: {error_msg}")
+
+        # Update task error status
+        dynamodb = DynamoDBClient()
+        try:
+            dynamodb.set_task_error(task_id, error_msg)
+        except Exception as db_error:
+            logger.error(f"Failed to update task error status: {db_error}")
+
+        raise ValueError(error_msg)
+
     # Use enhanced processor if enabled
     if use_enhanced_processor:
         from app.workers.chunk_processor import process_csv_file
@@ -356,7 +370,8 @@ def process_s3_csv_data(
                 'expected_rows': end_row - start_row,
                 's3_key': s3_key,
                 'namespace': namespace,
-                'task_id': task_id
+                'task_id': task_id,
+                'question_id': question_id
             }
             chunks_metadata.append(chunk_metadata)
         
@@ -511,8 +526,21 @@ def process_csv_chunk(self, task_id: str, chunk_metadata: Dict[str, Any]) -> Dic
                     failed_records += 1
                     continue
                 
-                # Prepare vector for upsert
-                vector_id = f"{task_id}_{chunk_id}_{i}"
+                # Get row ID from record
+                if isinstance(record, dict):
+                    row_id = record.get('id', '')
+                    if not row_id:
+                        raise ValueError(f"CSV record missing 'id' field required for vector ID construction at index {i}")
+                else:
+                    raise ValueError(f"Record at index {i} is not a dictionary, cannot extract 'id' field")
+
+                # Get question_id from chunk metadata
+                question_id = chunk_metadata.get('question_id')
+                if not question_id:
+                    raise ValueError(f"question_id is required for vector ID construction but was not provided in chunk metadata")
+
+                # Prepare vector for upsert with proper ID format
+                vector_id = f"{question_id}.{row_id}"
                 vector_data = {
                     'id': vector_id,
                     'values': embedding,
@@ -523,6 +551,8 @@ def process_csv_chunk(self, task_id: str, chunk_metadata: Dict[str, Any]) -> Dic
                         'chunk_id': chunk_id,
                         'record_index': i,
                         'task_id': task_id,
+                        'question_id': question_id,
+                        'row_id': row_id,
                         'processed_at': datetime.utcnow().isoformat()
                     }
                 }
