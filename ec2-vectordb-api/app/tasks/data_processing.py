@@ -721,19 +721,13 @@ def aggregate_chunk_results(
         total_processed = 0
         total_failed = 0
         total_vectors = 0
-        
-        chunk_processed = task_details.get('chunk_processed', {})
-        chunk_failed = task_details.get('chunk_failed', {})
-        chunk_vectors = task_details.get('chunk_vectors', {})
-        
-        for chunk_id in chunk_processed:
-            total_processed += chunk_processed.get(chunk_id, 0)
-        
-        for chunk_id in chunk_failed:
-            total_failed += chunk_failed.get(chunk_id, 0)
-        
-        for chunk_id in chunk_vectors:
-            total_vectors += chunk_vectors.get(chunk_id, 0)
+
+        chunks = task_details.get('chunks', {})
+
+        for chunk_id, chunk_data in chunks.items():
+            total_processed += chunk_data.get('processed_records', 0)
+            total_failed += chunk_data.get('failed_records', 0)
+            total_vectors += chunk_data.get('vectors_upserted', 0)
         
         # Update final task status
         final_status = 'COMPLETED' if failed_chunks == 0 else 'PARTIALLY_COMPLETED'
