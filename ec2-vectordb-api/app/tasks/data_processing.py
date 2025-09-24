@@ -541,20 +541,33 @@ def process_csv_chunk(self, task_id: str, chunk_metadata: Dict[str, Any]) -> Dic
 
                 # Prepare vector for upsert with proper ID format
                 vector_id = f"{question_id}.{row_id}"
+
+                # Prepare metadata
+                metadata = {
+                    'text': text_content[:1000],  # Limit metadata size
+                    'source': 's3_csv',
+                    's3_key': chunk_metadata['s3_key'],
+                    'chunk_id': chunk_id,
+                    'record_index': i,
+                    'task_id': task_id,
+                    'question_id': question_id,
+                    'row_id': row_id,
+                    'processed_at': datetime.utcnow().isoformat()
+                }
+
+                # Add ALL fields from CSV record as metadata (except formatted_text which is already in 'text')
+                if isinstance(record, dict):
+                    for field, value in record.items():
+                        # Skip formatted_text as it's already stored as 'text'
+                        # Skip fields that are already in metadata
+                        if field != 'formatted_text' and field not in metadata and value:
+                            # Convert value to string to ensure compatibility
+                            metadata[field] = str(value)
+
                 vector_data = {
                     'id': vector_id,
                     'values': embedding,
-                    'metadata': {
-                        'text': text_content[:1000],  # Limit metadata size
-                        'source': 's3_csv',
-                        's3_key': chunk_metadata['s3_key'],
-                        'chunk_id': chunk_id,
-                        'record_index': i,
-                        'task_id': task_id,
-                        'question_id': question_id,
-                        'row_id': row_id,
-                        'processed_at': datetime.utcnow().isoformat()
-                    }
+                    'metadata': metadata
                 }
                 vectors_to_upsert.append(vector_data)
                 
